@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FilterMe! 🎭</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      min-height: 100vh;
+      background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+      color: #fff;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      overflow-x: hidden;
+    }
+
+    header {
+      text-align: center;
+      padding: 1.5rem 1rem 0.5rem;
+    }
+    header h1 {
+      font-size: clamp(2rem, 5vw, 3.5rem);
+      background: linear-gradient(90deg, #f9a8d4, #c084fc, #60a5fa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      letter-spacing: -1px;
+    }
+    header p {
+      color: #a5b4fc;
+      font-size: 1rem;
+      margin-top: 0.25rem;
+    }
+
+    .stage {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1.25rem;
+      padding: 1rem;
+    }
+
+    .camera-box {
+      position: relative;
+      border-radius: 1.5rem;
+      overflow: hidden;
+      box-shadow: 0 0 60px rgba(192, 132, 252, 0.4);
+      border: 2px solid rgba(255,255,255,0.1);
+      max-width: 640px;
+      width: 100%;
+      aspect-ratio: 4/3;
+      background: #111;
+    }
+
+    video { display: none; }
+
+    canvas#output {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    #start-screen {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 1rem;
+      background: rgba(15,12,41,0.85);
+      backdrop-filter: blur(4px);
+    }
+    #start-screen .cam-icon { font-size: 4rem; }
+    #start-screen p { color: #c4b5fd; font-size: 1.05rem; text-align: center; padding: 0 1rem; }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #7c3aed, #4f46e5);
+      border: none;
+      color: #fff;
+      padding: 0.75rem 2rem;
+      font-size: 1.1rem;
+      border-radius: 999px;
+      cursor: pointer;
+      transition: transform 0.15s, box-shadow 0.15s;
+      font-weight: 600;
+      box-shadow: 0 4px 20px rgba(124,58,237,0.5);
+    }
+    .btn-primary:hover { transform: scale(1.06); box-shadow: 0 6px 28px rgba(124,58,237,0.7); }
+    .btn-primary:active { transform: scale(0.97); }
+
+    /* Quote overlay */
+    #quote-overlay {
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      padding: 1.2rem 1.4rem;
+      background: linear-gradient(transparent, rgba(0,0,0,0.82));
+      text-align: center;
+      display: none;
+    }
+    #quote-text {
+      font-size: clamp(0.85rem, 2.5vw, 1.15rem);
+      font-style: italic;
+      color: #fef9c3;
+      text-shadow: 0 1px 6px rgba(0,0,0,0.8);
+      line-height: 1.4;
+    }
+    #quote-author {
+      font-size: 0.75rem;
+      color: #fde68a;
+      margin-top: 0.3rem;
+      text-shadow: 0 1px 4px rgba(0,0,0,0.8);
+    }
+
+    /* Filter name badge */
+    #filter-badge {
+      position: absolute;
+      top: 1rem; left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.6);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 999px;
+      padding: 0.3rem 1rem;
+      font-size: 0.85rem;
+      font-weight: 700;
+      white-space: nowrap;
+      display: none;
+    }
+
+    /* Filter strip */
+    .filter-strip {
+      display: flex;
+      gap: 0.75rem;
+      overflow-x: auto;
+      padding: 0.5rem 1rem;
+      max-width: 680px;
+      width: 100%;
+      scrollbar-width: none;
+    }
+    .filter-strip::-webkit-scrollbar { display: none; }
+
+    .filter-btn {
+      flex: 0 0 auto;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.3rem;
+      background: rgba(255,255,255,0.07);
+      border: 2px solid transparent;
+      border-radius: 1rem;
+      padding: 0.6rem 1rem;
+      cursor: pointer;
+      transition: all 0.2s;
+      color: #fff;
+      font-size: 0.78rem;
+      font-weight: 600;
+      min-width: 72px;
+    }
+    .filter-btn .emoji { font-size: 1.8rem; line-height: 1; }
+    .filter-btn:hover { background: rgba(255,255,255,0.14); transform: translateY(-2px); }
+    .filter-btn.active {
+      border-color: #c084fc;
+      background: rgba(192,132,252,0.18);
+      box-shadow: 0 0 18px rgba(192,132,252,0.4);
+    }
+
+    /* Controls row */
+    .controls {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .btn-secondary {
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: #fff;
+      padding: 0.55rem 1.3rem;
+      border-radius: 999px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-weight: 600;
+      transition: all 0.2s;
+    }
+    .btn-secondary:hover { background: rgba(255,255,255,0.2); transform: scale(1.04); }
+
+    /* Snapshot flash */
+    .flash {
+      position: fixed; inset: 0;
+      background: #fff;
+      opacity: 0;
+      pointer-events: none;
+      z-index: 999;
+      animation: flash 0.35s ease-out;
+    }
+    @keyframes flash {
+      0%   { opacity: 0.9; }
+      100% { opacity: 0; }
+    }
+
+    /* Saved snaps */
+    #snaps-section { width: 100%; max-width: 680px; padding: 0 1rem 1rem; }
+    #snaps-section h3 { font-size: 1rem; color: #c4b5fd; margin-bottom: 0.6rem; }
+    #snaps-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+      gap: 0.6rem;
+    }
+    .snap-thumb {
+      border-radius: 0.75rem;
+      overflow: hidden;
+      border: 2px solid rgba(255,255,255,0.15);
+      cursor: pointer;
+      transition: transform 0.2s;
+    }
+    .snap-thumb:hover { transform: scale(1.04); }
+    .snap-thumb img { width: 100%; display: block; }
+
+    footer {
+      text-align: center;
+      padding: 1rem;
+      color: rgba(255,255,255,0.25);
+      font-size: 0.75rem;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>✨ FilterMe!</h1>
+  <p>Strike a pose. Pick a vibe. Laugh at yourself.</p>
+</header>
+
+<div class="stage">
+  <div class="camera-box">
+    <video id="video" autoplay muted playsinline></video>
+    <canvas id="output"></canvas>
+
+    <div id="start-screen">
+      <div class="cam-icon">📸</div>
+      <p>Enable your camera and become the main character energy you truly deserve.</p>
+      <button class="btn-primary" id="start-btn">Enable Camera</button>
+    </div>
+
+    <div id="filter-badge"></div>
+
+    <div id="quote-overlay">
+      <div id="quote-text"></div>
+      <div id="quote-author"></div>
+    </div>
+  </div>
+
+  <div class="filter-strip" id="filter-strip"></div>
+
+  <div class="controls">
+    <button class="btn-secondary" id="new-quote-btn" style="display:none">🎲 New Quote</button>
+    <button class="btn-secondary" id="snap-btn" style="display:none">📷 Save Snap</button>
+  </div>
+
+  <div id="snaps-section" style="display:none">
+    <h3>📁 Your Snaps</h3>
+    <div id="snaps-grid"></div>
+  </div>
+</div>
+
+<footer>Made with 💜 and absolutely zero dignity · FilterMe</footer>
+
+<script>
+const FILTERS = [
+  {
+    id: 'potato',
+    name: 'Potato Mode',
+    emoji: '🥔',
+    apply: pixelate,
+    quotes: [
+      { text: "404: Quality Not Found", author: "— Your Graphics Card" },
+      { text: "I render at the speed of a 2002 dial-up connection.", author: "— Me, apparently" },
+      { text: "Running on potato power since forever.", author: "— My CPU" },
+      { text: "Why be HD when you can be character?", author: "— Resolution Philosopher" },
+      { text: "Buffering... buffering... buffering...", author: "— The Universe, probably" },
+    ]
+  },
+  {
+    id: 'noir',
+    name: 'Noir Detective',
+    emoji: '🕵️',
+    apply: noir,
+    quotes: [
+      { text: "The name's Bond… but you can call me Dave.", author: "— Dave Bond" },
+      { text: "Every shadow tells a story. Mine involves snacks.", author: "— A Detective" },
+      { text: "I've seen things you wouldn't believe. Mostly my own browser history.", author: "— Film Noir Me" },
+      { text: "In this town, everyone's guilty of something. Mine's three pots of coffee.", author: "— The Detective" },
+      { text: "The rain fell like bad decisions: heavy and non-stop.", author: "— Very Dramatic Me" },
+    ]
+  },
+  {
+    id: 'matrix',
+    name: 'Matrix Mode',
+    emoji: '💊',
+    apply: matrix,
+    quotes: [
+      { text: "There is no spoon. There ARE unlimited snacks though.", author: "— Neo's Cousin" },
+      { text: "You take the red pill, you see the grocery list.", author: "— Morpheus, probably" },
+      { text: "I know kung fu. And also where all the good restaurants are.", author: "— Actual Neo" },
+      { text: "Wake up, Neo. You have 47 unread notifications.", author: "— The Matrix" },
+      { text: "Unfortunately, no one can be told what your vibe is. You have to feel it.", author: "— Morpheus" },
+    ]
+  },
+  {
+    id: 'sunset',
+    name: 'Golden Hour',
+    emoji: '🌅',
+    apply: sunset,
+    quotes: [
+      { text: "Live. Laugh. Apply filters until problems disappear.", author: "— Life Coach" },
+      { text: "Golden hour? More like golden POWER.", author: "— Me, delusional" },
+      { text: "I'm not late, I'm fashionably sun-kissed.", author: "— Chronically Late Person" },
+      { text: "Vitamin D and delusion: my wellness routine.", author: "— Wellness Guru" },
+      { text: "The sunset didn't hit different. You hit different.", author: "— Your Camera Roll" },
+    ]
+  },
+  {
+    id: 'underwater',
+    name: 'Deep Sea',
+    emoji: '🐠',
+    apply: underwater,
+    quotes: [
+      { text: "Just keep swimming. Just keep posing.", author: "— Dory, fashionista" },
+      { text: "Finding Nemo but make it a runway.", author: "— Marine Vogue" },
+      { text: "I'm not drowning in my problems, I'm THRIVING in them.", author: "— A Fish" },
+      { text: "Technically I'm 70% water so this filter is accurate.", author: "— Science" },
+      { text: "Under the sea, under the sea — where the Wi-Fi's weak and nobody judges me.", author: "— Sebastian" },
+    ]
+  },
+  {
+    id: 'glitch',
+    name: 'Glitch Effect',
+    emoji: '👾',
+    apply: glitch,
+    quotes: [
+      { text: "Err0r 418: I am a teapot. Also a mess.", author: "— HTTP Status" },
+      { text: "Have you tried turning yourself off and on again?", author: "— IT Support" },
+      { text: "I'm not broken. I'm aesthetically challenged.", author: "— Corrupted File" },
+      { text: "My personality is just undefined behavior.", author: "— A Bug" },
+      { text: "Glitching through life one frame drop at a time.", author: "— Lag Champion" },
+    ]
+  },
+  {
+    id: 'oldfilm',
+    name: 'Old Timey',
+    emoji: '🎞️',
+    apply: oldFilm,
+    quotes: [
+      { text: "Back in my day we had 2 filters and we were GRATEFUL.", author: "— Grandpa Camera" },
+      { text: "Vintage vibes. Modern problems. Classic excuses.", author: "— 1920s Me" },
+      { text: "I came. I saw. I had terrible posture in every photo.", author: "— Historical Record" },
+      { text: "These are not wrinkles, they are experience lines.", author: "— Old Film Wisdom" },
+      { text: "If this were a silent film, my drama would still be deafening.", author: "— The Director" },
+    ]
+  },
+  {
+    id: 'mirror',
+    name: 'Mirror World',
+    emoji: '🪞',
+    apply: mirrorWorld,
+    quotes: [
+      { text: "Mirror, mirror on the wall — who's the filterest of them all?", author: "— Evil Queen" },
+      { text: "Plot twist: your evil twin is just you on a Monday.", author: "— The Multiverse" },
+      { text: "I'm not symmetric, I'm just asymmetrically iconic.", author: "— My Face" },
+      { text: "Welcome to the mirror dimension. Everything is the same but weirder.", author: "— Dr Strange" },
+      { text: "You were your own doppelganger all along.", author: "— A Mind-Bender" },
+    ]
+  },
+  {
+    id: 'rainbow',
+    name: 'Rainbow Brain',
+    emoji: '🌈',
+    apply: rainbowShift,
+    quotes: [
+      { text: "I contain multitudes. Also every color of the spectrum.", author: "— Me, Colorful" },
+      { text: "No rain, no rainbow. No coffee, no me.", author: "— Motivational Poster" },
+      { text: "My personality type is: all of them, simultaneously.", author: "— Chaos Gremlin" },
+      { text: "I don't have one vibe. I have ALL the vibes. Always.", author: "— Vibe Overload" },
+      { text: "Roy G. Biv called. He wants his look back.", author: "— Your Hue" },
+    ]
+  },
+  {
+    id: 'tiny',
+    name: 'Funhouse',
+    emoji: '🎪',
+    apply: funhouse,
+    quotes: [
+      { text: "I am perfectly normal, thank you for asking.", author: "— Funhouse Mirror" },
+      { text: "Life is a carnival and I lost my tickets.", author: "— The Clown" },
+      { text: "Distorted? I prefer 'creatively proportioned'.", author: "— A Reflection" },
+      { text: "This is exactly how I look in my dreams. Concerning.", author: "— Sleep Scientist" },
+      { text: "Normal is overrated. Have you considered chaotic?", author: "— The Carnival" },
+    ]
+  },
+];
+
+// ── Filter functions ──────────────────────────────────────────────────────────
+
+function pixelate(ctx, w, h) {
+  const size = 14;
+  const tmp = document.createElement('canvas');
+  tmp.width = Math.ceil(w / size);
+  tmp.height = Math.ceil(h / size);
+  const tc = tmp.getContext('2d');
+  tc.drawImage(ctx.canvas, 0, 0, tmp.width, tmp.height);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(tmp, 0, 0, w, h);
+  ctx.imageSmoothingEnabled = true;
+}
+
+function noir(ctx, w, h) {
+  const id = ctx.getImageData(0, 0, w, h);
+  const d = id.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const g = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+    const c = Math.max(0, Math.min(255, (g - 128) * 1.8 + 128));
+    d[i] = d[i+1] = d[i+2] = c;
+  }
+  ctx.putImageData(id, 0, 0);
+}
+
+function matrix(ctx, w, h) {
+  const id = ctx.getImageData(0, 0, w, h);
+  const d = id.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const g = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+    d[i]   = 0;
+    d[i+1] = Math.min(255, g * 1.4);
+    d[i+2] = 0;
+  }
+  ctx.putImageData(id, 0, 0);
+}
+
+function sunset(ctx, w, h) {
+  const id = ctx.getImageData(0, 0, w, h);
+  const d = id.data;
+  for (let i = 0; i < d.length; i += 4) {
+    d[i]   = Math.min(255, d[i]   * 1.3 + 30);
+    d[i+1] = Math.min(255, d[i+1] * 0.95 + 10);
+    d[i+2] = Math.min(255, d[i+2] * 0.55);
+  }
+  ctx.putImageData(id, 0, 0);
+}
+
+function underwater(ctx, w, h) {
+  const id = ctx.getImageData(0, 0, w, h);
+  const d = id.data;
+  for (let i = 0; i < d.length; i += 4) {
+    d[i]   = Math.min(255, d[i]   * 0.4);
+    d[i+1] = Math.min(255, d[i+1] * 0.85 + 20);
+    d[i+2] = Math.min(255, d[i+2] * 1.3 + 40);
+  }
+  ctx.putImageData(id, 0, 0);
+}
+
+let glitchOffset = 0;
+function glitch(ctx, w, h) {
+  const id = ctx.getImageData(0, 0, w, h);
+  const d = id.data;
+  const shift = Math.floor(Math.sin(glitchOffset) * 18);
+  glitchOffset += 0.2;
+  const tmp = new Uint8ClampedArray(d);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      const rx = Math.min(w - 1, Math.max(0, x + shift));
+      const ri = (y * w + rx) * 4;
+      d[i]   = tmp[ri];         // R shifted
+      d[i+1] = tmp[i+1];        // G normal
+      const bx = Math.min(w - 1, Math.max(0, x - shift));
+      const bi = (y * w + bx) * 4;
+      d[i+2] = tmp[bi+2];       // B anti-shifted
+    }
+  }
+  ctx.putImageData(id, 0, 0);
+}
+
+let filmTick = 0;
+function oldFilm(ctx, w, h) {
+  filmTick++;
+  const id = ctx.getImageData(0, 0, w, h);
+  const d = id.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i], g = d[i+1], b = d[i+2];
+    d[i]   = Math.min(255, r * 0.393 + g * 0.769 + b * 0.189);
+    d[i+1] = Math.min(255, r * 0.349 + g * 0.686 + b * 0.168);
+    d[i+2] = Math.min(255, r * 0.272 + g * 0.534 + b * 0.131);
+    // grain
+    const noise = (Math.random() - 0.5) * 60;
+    d[i]   = Math.min(255, Math.max(0, d[i]   + noise));
+    d[i+1] = Math.min(255, Math.max(0, d[i+1] + noise));
+    d[i+2] = Math.min(255, Math.max(0, d[i+2] + noise));
+  }
+  ctx.putImageData(id, 0, 0);
+  // scanlines
+  ctx.fillStyle = 'rgba(0,0,0,0.12)';
+  for (let y = (filmTick % 4); y < h; y += 4) {
+    ctx.fillRect(0, y, w, 1);
+  }
+}
+
+function mirrorWorld(ctx, w, h) {
+  ctx.save();
+  ctx.scale(-1, 1);
+  ctx.drawImage(ctx.canvas, -w, 0, w, h);
+  ctx.restore();
+}
+
+let hueShift = 0;
+function rainbowShift(ctx, w, h) {
+  hueShift = (hueShift + 2) % 360;
+  const id = ctx.getImageData(0, 0, w, h);
+  const d = id.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const [h2, s, l] = rgbToHsl(d[i], d[i+1], d[i+2]);
+    const [r2, g2, b2] = hslToRgb((h2 + hueShift / 360) % 1, Math.min(1, s + 0.4), l);
+    d[i] = r2; d[i+1] = g2; d[i+2] = b2;
+  }
+  ctx.putImageData(id, 0, 0);
+}
+
+let funTick = 0;
+function funhouse(ctx, w, h) {
+  funTick += 0.04;
+  const tmp = document.createElement('canvas');
+  tmp.width = w; tmp.height = h;
+  const tc = tmp.getContext('2d');
+  tc.drawImage(ctx.canvas, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  const id = ctx.getImageData(0, 0, w, h);
+  const src = tc.getImageData(0, 0, w, h);
+  const cx = w / 2, cy = h / 2;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const dx = (x - cx) / cx, dy = (y - cy) / cy;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const wave = Math.sin(dist * 8 - funTick) * 0.05;
+      const sx = Math.round(cx + (dx + dx * wave) * cx);
+      const sy = Math.round(cy + (dy + dy * wave) * cy);
+      if (sx >= 0 && sx < w && sy >= 0 && sy < h) {
+        const si = (sy * w + sx) * 4;
+        const di = (y * w + x) * 4;
+        id.data[di]   = src.data[si];
+        id.data[di+1] = src.data[si+1];
+        id.data[di+2] = src.data[si+2];
+        id.data[di+3] = src.data[si+3];
+      }
+    }
+  }
+  ctx.putImageData(id, 0, 0);
+}
+
+// ── HSL helpers ───────────────────────────────────────────────────────────────
+function rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h, s, l = (max + min) / 2;
+  if (max === min) { h = s = 0; }
+  else {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: h = ((g - b) / d + (g < b ? 6 : 0)) / 6; break;
+      case g: h = ((b - r) / d + 2) / 6; break;
+      default: h = ((r - g) / d + 4) / 6;
+    }
+  }
+  return [h, s, l];
+}
+function hslToRgb(h, s, l) {
+  let r, g, b;
+  if (s === 0) { r = g = b = l; }
+  else {
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    const hue2rgb = (p, q, t) => {
+      if (t < 0) t += 1; if (t > 1) t -= 1;
+      if (t < 1/6) return p + (q - p) * 6 * t;
+      if (t < 1/2) return q;
+      if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+      return p;
+    };
+    r = hue2rgb(p, q, h + 1/3);
+    g = hue2rgb(p, q, h);
+    b = hue2rgb(p, q, h - 1/3);
+  }
+  return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+}
+
+// ── App state ─────────────────────────────────────────────────────────────────
+const video    = document.getElementById('video');
+const canvas   = document.getElementById('output');
+const ctx      = canvas.getContext('2d');
+const startBtn = document.getElementById('start-btn');
+const startScr = document.getElementById('start-screen');
+const quoteTxt = document.getElementById('quote-text');
+const quoteAth = document.getElementById('quote-author');
+const quoteOvl = document.getElementById('quote-overlay');
+const badge    = document.getElementById('filter-badge');
+const newQBtn  = document.getElementById('new-quote-btn');
+const snapBtn  = document.getElementById('snap-btn');
+const snapsGrid = document.getElementById('snaps-grid');
+const snapsSec = document.getElementById('snaps-section');
+
+let activeFilter = FILTERS[0];
+let animId = null;
+
+// Build filter buttons
+const strip = document.getElementById('filter-strip');
+FILTERS.forEach((f, idx) => {
+  const btn = document.createElement('button');
+  btn.className = 'filter-btn' + (idx === 0 ? ' active' : '');
+  btn.innerHTML = `<span class="emoji">${f.emoji}</span><span>${f.name}</span>`;
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    activeFilter = f;
+    badge.textContent = f.emoji + ' ' + f.name;
+    showRandomQuote();
+  });
+  strip.appendChild(btn);
+});
+
+function showRandomQuote() {
+  const q = activeFilter.quotes[Math.floor(Math.random() * activeFilter.quotes.length)];
+  quoteTxt.textContent = `"${q.text}"`;
+  quoteAth.textContent = q.author;
+  quoteOvl.style.display = 'block';
+}
+
+newQBtn.addEventListener('click', showRandomQuote);
+
+snapBtn.addEventListener('click', () => {
+  const flash = document.createElement('div');
+  flash.className = 'flash';
+  document.body.appendChild(flash);
+  setTimeout(() => flash.remove(), 400);
+
+  const thumb = document.createElement('canvas');
+  thumb.width = canvas.width; thumb.height = canvas.height;
+  thumb.getContext('2d').drawImage(canvas, 0, 0);
+
+  const img = new Image();
+  img.src = thumb.toDataURL('image/jpeg', 0.85);
+  img.title = activeFilter.name;
+
+  const link = document.createElement('a');
+  link.href = img.src;
+  link.download = `filterme-${activeFilter.id}-${Date.now()}.jpg`;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'snap-thumb';
+  wrap.appendChild(img);
+  wrap.addEventListener('click', () => link.click());
+  snapsGrid.prepend(wrap);
+  snapsSec.style.display = 'block';
+});
+
+startBtn.addEventListener('click', async () => {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+    video.srcObject = stream;
+    await video.play();
+
+    canvas.width  = video.videoWidth  || 640;
+    canvas.height = video.videoHeight || 480;
+
+    startScr.style.display = 'none';
+    badge.style.display = 'block';
+    badge.textContent = activeFilter.emoji + ' ' + activeFilter.name;
+    newQBtn.style.display = 'inline-block';
+    snapBtn.style.display = 'inline-block';
+    showRandomQuote();
+    render();
+  } catch (e) {
+    alert('Camera access denied or unavailable. Please allow camera permissions and try again.');
+  }
+});
+
+function render() {
+  if (video.readyState >= 2) {
+    if (canvas.width !== video.videoWidth && video.videoWidth) {
+      canvas.width  = video.videoWidth;
+      canvas.height = video.videoHeight;
+    }
+    ctx.save();
+    // Mirror for selfie feel
+    if (activeFilter.id !== 'mirror') {
+      ctx.translate(canvas.width, 0);
+      ctx.scale(-1, 1);
+    }
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    ctx.restore();
+    activeFilter.apply(ctx, canvas.width, canvas.height);
+  }
+  animId = requestAnimationFrame(render);
+}
+</script>
+</body>
+</html>
