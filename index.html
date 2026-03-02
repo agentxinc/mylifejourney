@@ -243,6 +243,9 @@
       <div class="cam-icon">📸</div>
       <p>Enable your camera and become the main character energy you truly deserve.</p>
       <button class="btn-primary" id="start-btn">Enable Camera</button>
+      <p id="cam-hint" style="font-size:0.75rem;color:#7c6fcd;margin-top:0.5rem;display:none">
+        🪟 Windows users: if blocked, open <strong>Settings → Privacy → Camera</strong> and allow your browser.
+      </p>
     </div>
 
     <div id="filter-badge"></div>
@@ -508,9 +511,13 @@ function oldFilm(ctx, w, h) {
 }
 
 function mirrorWorld(ctx, w, h) {
+  // Use an intermediate canvas — drawing a canvas to itself is unreliable on Windows/Firefox
+  const tmp = document.createElement('canvas');
+  tmp.width = w; tmp.height = h;
+  tmp.getContext('2d').drawImage(ctx.canvas, 0, 0);
   ctx.save();
   ctx.scale(-1, 1);
-  ctx.drawImage(ctx.canvas, -w, 0, w, h);
+  ctx.drawImage(tmp, -w, 0, w, h);
   ctx.restore();
 }
 
@@ -665,8 +672,22 @@ snapBtn.addEventListener('click', () => {
 });
 
 startBtn.addEventListener('click', async () => {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    alert('Your browser does not support camera access.\nPlease use Chrome, Edge, or Firefox on a modern OS.');
+    return;
+  }
+
+  // Show Windows hint after a short delay (visible while permission dialog is up)
+  const hint = document.getElementById('cam-hint');
+  const hintTimer = setTimeout(() => { if (hint) hint.style.display = 'block'; }, 2000);
+
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+    // Use plain `video: true` first — most compatible across Windows, Mac, iPhone
+    // Avoid facingMode:'user' which can throw OverconstrainedError on desktop webcams
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    clearTimeout(hintTimer);
+    if (hint) hint.style.display = 'none';
+
     video.srcObject = stream;
     await video.play();
 
@@ -681,7 +702,27 @@ startBtn.addEventListener('click', async () => {
     showRandomQuote();
     render();
   } catch (e) {
-    alert('Camera access denied or unavailable. Please allow camera permissions and try again.');
+    clearTimeout(hintTimer);
+    if (hint) hint.style.display = 'block';
+    let msg;
+    if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
+      msg = '📷 Camera access was blocked.\n\n'
+          + 'On Windows:\n'
+          + '  1. Open Settings → Privacy & Security → Camera\n'
+          + '  2. Turn on "Let apps access your camera"\n'
+          + '  3. Scroll down and enable your browser (Chrome / Edge)\n'
+          + '  4. Refresh this page and try again.\n\n'
+          + 'Also check your browser\'s address bar for a camera block icon.';
+    } else if (e.name === 'NotFoundError' || e.name === 'DevicesNotFoundError') {
+      msg = '📷 No camera found.\nPlease connect a webcam and try again.';
+    } else if (e.name === 'NotReadableError' || e.name === 'TrackStartError') {
+      msg = '📷 Camera is in use by another app.\nClose apps like Teams, Zoom, or Skype and try again.';
+    } else if (e.name === 'OverconstrainedError') {
+      msg = '📷 Your camera does not support the required settings.\nTry a different browser.';
+    } else {
+      msg = '📷 Camera error: ' + e.message + '\n\nTry refreshing the page.';
+    }
+    alert(msg);
   }
 });
 
