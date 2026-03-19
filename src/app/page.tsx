@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import dynamic from "next/dynamic";
 import EventForm from "@/components/EventForm";
 import EventTimeline from "@/components/EventTimeline";
 import StoryPreview from "@/components/StoryPreview";
 import { LifeEvent, GeneratedStory } from "@/types";
+import { getRandomQuote } from "@/lib/quotes";
 
 const PdfDocument = dynamic(() => import("@/components/PdfDocument"), {
   ssr: false,
@@ -18,6 +19,11 @@ export default function Home() {
   const [isImproving, setIsImproving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<"input" | "preview">("input");
+  const [quote, setQuote] = useState<{ text: string; author: string } | null>(null);
+
+  useEffect(() => {
+    setQuote(getRandomQuote());
+  }, []);
 
   const addEvent = useCallback((event: LifeEvent) => {
     setEvents((prev) => [...prev, event]);
@@ -97,6 +103,16 @@ export default function Home() {
 
   return (
     <main className="min-h-screen">
+      {/* Quote Banner */}
+      {quote && (
+        <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-b border-amber-100 py-3 px-4 text-center">
+          <p className="text-gray-700 italic text-sm max-w-2xl mx-auto">
+            &ldquo;{quote.text}&rdquo;
+          </p>
+          <p className="text-xs text-gray-400 mt-1">&mdash; {quote.author}</p>
+        </div>
+      )}
+
       {/* Header */}
       <header className="gradient-bg text-white py-6 px-4">
         <div className="max-w-5xl mx-auto flex items-center justify-between">
@@ -155,24 +171,31 @@ export default function Home() {
               <EventTimeline events={events} onRemoveEvent={removeEvent} />
             </div>
 
-            {events.length > 0 && (
-              <div className="text-center mt-8">
-                <button
-                  onClick={generateStory}
-                  className="btn-primary text-lg px-10 py-4"
-                  disabled={isGenerating}
-                >
-                  {isGenerating
-                    ? "Creating Your Storybook..."
-                    : "Generate My Life Storybook"}
-                </button>
-                {isGenerating && (
-                  <p className="text-sm text-gray-400 mt-3">
-                    AI is crafting your personalized story...
-                  </p>
-                )}
-              </div>
-            )}
+            <div className="text-center mt-8">
+              <button
+                onClick={generateStory}
+                className={`text-lg px-10 py-4 rounded-full font-semibold transition-all ${
+                  events.length > 0
+                    ? "btn-primary"
+                    : "bg-gray-200 text-gray-400 cursor-not-allowed"
+                }`}
+                disabled={isGenerating || events.length === 0}
+              >
+                {isGenerating
+                  ? "Creating Your Storybook..."
+                  : "Generate My Life Storybook"}
+              </button>
+              {events.length === 0 && (
+                <p className="text-sm text-gray-400 mt-3">
+                  Add at least one life event above to generate your storybook
+                </p>
+              )}
+              {isGenerating && (
+                <p className="text-sm text-gray-400 mt-3">
+                  AI is crafting your personalized story...
+                </p>
+              )}
+            </div>
           </>
         ) : (
           story && (

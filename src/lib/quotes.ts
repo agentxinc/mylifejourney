@@ -1,0 +1,36 @@
+const LIFE_QUOTES = [
+  { text: "Life is what happens when you're busy making other plans.", author: "John Lennon" },
+  { text: "In the end, it's not the years in your life that count. It's the life in your years.", author: "Abraham Lincoln" },
+  { text: "The purpose of our lives is to be happy.", author: "Dalai Lama" },
+  { text: "Life is really simple, but we insist on making it complicated.", author: "Confucius" },
+  { text: "The unexamined life is not worth living.", author: "Socrates" },
+  { text: "Turn your wounds into wisdom.", author: "Oprah Winfrey" },
+  { text: "The biggest adventure you can take is to live the life of your dreams.", author: "Oprah Winfrey" },
+  { text: "Life is either a daring adventure or nothing at all.", author: "Helen Keller" },
+  { text: "Many of life's failures are people who did not realize how close they were to success when they gave up.", author: "Thomas Edison" },
+  { text: "Keep smiling, because life is a beautiful thing and there's so much to smile about.", author: "Marilyn Monroe" },
+  { text: "Life is a succession of lessons which must be lived to be understood.", author: "Ralph Waldo Emerson" },
+  { text: "You only live once, but if you do it right, once is enough.", author: "Mae West" },
+  { text: "Not how long, but how well you have lived is the main thing.", author: "Seneca" },
+  { text: "The good life is one inspired by love and guided by knowledge.", author: "Bertrand Russell" },
+  { text: "Life is 10% what happens to us and 90% how we react to it.", author: "Charles R. Swindoll" },
+  { text: "Every moment is a fresh beginning.", author: "T.S. Eliot" },
+  { text: "The best time to plant a tree was 20 years ago. The second best time is now.", author: "Chinese Proverb" },
+  { text: "Your time is limited, don't waste it living someone else's life.", author: "Steve Jobs" },
+  { text: "Life shrinks or expands in proportion to one's courage.", author: "Anaïs Nin" },
+  { text: "What we think, we become.", author: "Buddha" },
+  { text: "Believe you can and you're halfway there.", author: "Theodore Roosevelt" },
+  { text: "The only impossible journey is the one you never begin.", author: "Tony Robbins" },
+  { text: "Life is short, and it is up to you to make it sweet.", author: "Sarah Louise Delany" },
+  { text: "Happiness is not something ready made. It comes from your own actions.", author: "Dalai Lama" },
+  { text: "Do not dwell in the past, do not dream of the future, concentrate the mind on the present moment.", author: "Buddha" },
+  { text: "The journey of a thousand miles begins with one step.", author: "Lao Tzu" },
+  { text: "It is during our darkest moments that we must focus to see the light.", author: "Aristotle" },
+  { text: "To live is the rarest thing in the world. Most people exist, that is all.", author: "Oscar Wilde" },
+  { text: "Life doesn't require that we be the best, only that we try our best.", author: "H. Jackson Brown Jr." },
+  { text: "The whole secret of a successful life is to find out what is one's destiny to do, and then do it.", author: "Henry Ford" },
+];
+
+export function getRandomQuote() {
+  return LIFE_QUOTES[Math.floor(Math.random() * LIFE_QUOTES.length)];
+}
