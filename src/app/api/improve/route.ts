@@ -1,8 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { improveStory } from "@/lib/gemini";
+import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 import { StoryPage } from "@/types";
 
 export async function POST(request: NextRequest) {
+  const ip = getClientIp(request);
+  const rate = checkRateLimit(`improve:${ip}`);
+  if (!rate.allowed) {
+    return NextResponse.json(
+      { error: "Too many requests. Please try again shortly." },
+      {
+        status: 429,
+        headers: { "Retry-After": String(rate.retryAfterSec) },
+      }
+    );
+  }
+
   try {
     const {
       story,
