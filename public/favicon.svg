@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="MyLifeJourney">
+  <rect width="64" height="64" rx="14" fill="#6366f1"/>
+  <path d="M16 14h22c5 0 9 4 9 9v27c0-3.5-2.8-6.4-6.3-6.4H16V14z" fill="#eef2ff"/>
+  <path d="M16 43.6h24.7c3.5 0 6.3 2.9 6.3 6.4H22c-3.3 0-6-2.7-6-6V43.6z" fill="#c7d2fe"/>
+  <path d="M22 22h14M22 29h12M22 36h10" stroke="#4f46e5" stroke-width="2.5" stroke-linecap="round"/>
+  <circle cx="46" cy="20" r="5" fill="#f59e0b"/>
+</svg>
