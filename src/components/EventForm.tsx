@@ -1,19 +1,47 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import exifr from "exifr";
 import { LifeEvent } from "@/types";
 
 interface EventFormProps {
   onAddEvent: (event: LifeEvent) => void;
+  onUpdateEvent?: (event: LifeEvent) => void;
+  editingEvent?: LifeEvent | null;
+  onCancelEdit?: () => void;
 }
 
-export default function EventForm({ onAddEvent }: EventFormProps) {
+export default function EventForm({
+  onAddEvent,
+  onUpdateEvent,
+  editingEvent = null,
+  onCancelEdit,
+}: EventFormProps) {
   const [title, setTitle] = useState("");
   const [date, setDate] = useState("");
   const [description, setDescription] = useState("");
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [dateSource, setDateSource] = useState<"manual" | "exif">("manual");
+
+  const isEditing = Boolean(editingEvent);
+
+  useEffect(() => {
+    if (editingEvent) {
+      setTitle(editingEvent.title);
+      setDate(editingEvent.date);
+      setDescription(editingEvent.description);
+      setImagePreview(editingEvent.imageUrl);
+      setDateSource("manual");
+    }
+  }, [editingEvent]);
+
+  function resetForm() {
+    setTitle("");
+    setDate("");
+    setDescription("");
+    setImagePreview(null);
+    setDateSource("manual");
+  }
 
   async function handleImageChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -49,6 +77,18 @@ export default function EventForm({ onAddEvent }: EventFormProps) {
     e.preventDefault();
     if (!title || !date || !description) return;
 
+    if (isEditing && editingEvent && onUpdateEvent) {
+      onUpdateEvent({
+        ...editingEvent,
+        title,
+        date,
+        description,
+        imageUrl: imagePreview,
+      });
+      resetForm();
+      return;
+    }
+
     const event: LifeEvent = {
       id: crypto.randomUUID(),
       title,
@@ -58,11 +98,12 @@ export default function EventForm({ onAddEvent }: EventFormProps) {
     };
 
     onAddEvent(event);
-    setTitle("");
-    setDate("");
-    setDescription("");
-    setImagePreview(null);
-    setDateSource("manual");
+    resetForm();
+  }
+
+  function handleCancel() {
+    resetForm();
+    onCancelEdit?.();
   }
 
   return (
@@ -71,7 +112,7 @@ export default function EventForm({ onAddEvent }: EventFormProps) {
       className="bg-white rounded-2xl p-6 card-shadow"
     >
       <h2 className="text-xl font-bold mb-4 text-indigo-500">
-        Add a Life Event
+        {isEditing ? "Edit Life Event" : "Add a Life Event"}
       </h2>
 
       <div className="space-y-4">
@@ -111,6 +152,9 @@ export default function EventForm({ onAddEvent }: EventFormProps) {
               setDate(e.target.value);
               setDateSource("manual");
             }}
+            aria-describedby={
+              dateSource === "exif" ? "event-date-hint" : undefined
+            }
             className={`w-full px-4 py-2.5 rounded-xl border outline-none transition ${
               dateSource === "exif"
                 ? "border-green-300 bg-green-50 focus:border-green-400 focus:ring-2 focus:ring-green-100"
@@ -170,9 +214,20 @@ export default function EventForm({ onAddEvent }: EventFormProps) {
           )}
         </div>
 
-        <button type="submit" className="btn-primary w-full text-center">
-          + Add Event
-        </button>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <button type="submit" className="btn-primary w-full text-center">
+            {isEditing ? "Save Changes" : "+ Add Event"}
+          </button>
+          {isEditing && (
+            <button
+              type="button"
+              onClick={handleCancel}
+              className="btn-secondary w-full text-center"
+            >
+              Cancel
+            </button>
+          )}
+        </div>
       </div>
     </form>
   );

@@ -8,12 +8,36 @@ import StoryPreview from "@/components/StoryPreview";
 import { LifeEvent, GeneratedStory } from "@/types";
 import { getRandomQuote } from "@/lib/quotes";
 
+const STORAGE_KEY = "mylifejourney-events";
+
 const PdfDocument = dynamic(() => import("@/components/PdfDocument"), {
   ssr: false,
 });
 
+function loadStoredEvents(): LifeEvent[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (e): e is LifeEvent =>
+        e &&
+        typeof e.id === "string" &&
+        typeof e.title === "string" &&
+        typeof e.date === "string" &&
+        typeof e.description === "string"
+    );
+  } catch {
+    return [];
+  }
+}
+
 export default function Home() {
   const [events, setEvents] = useState<LifeEvent[]>([]);
+  const [hydrated, setHydrated] = useState(false);
+  const [editingEvent, setEditingEvent] = useState<LifeEvent | null>(null);
   const [story, setStory] = useState<GeneratedStory | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isImproving, setIsImproving] = useState(false);
@@ -24,14 +48,39 @@ export default function Home() {
 
   useEffect(() => {
     setQuote(getRandomQuote());
+    setEvents(loadStoredEvents());
+    setHydrated(true);
   }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      // Persist without File blobs; imageUrl data URLs are kept when present
+      const serializable = events.map(({ id, title, date, description, imageUrl }) => ({
+        id,
+        title,
+        date,
+        description,
+        imageUrl: imageUrl ?? null,
+      }));
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(serializable));
+    } catch {
+      // Quota or private mode — non-fatal
+    }
+  }, [events, hydrated]);
 
   const addEvent = useCallback((event: LifeEvent) => {
     setEvents((prev) => [...prev, event]);
   }, []);
 
+  const updateEvent = useCallback((event: LifeEvent) => {
+    setEvents((prev) => prev.map((e) => (e.id === event.id ? event : e)));
+    setEditingEvent(null);
+  }, []);
+
   const removeEvent = useCallback((id: string) => {
     setEvents((prev) => prev.filter((e) => e.id !== id));
+    setEditingEvent((current) => (current?.id === id ? null : current));
   }, []);
 
   async function generateStory() {
@@ -182,10 +231,16 @@ export default function Home() {
         {view === "input" ? (
           <>
             <div className="grid md:grid-cols-2 gap-8">
-              <EventForm onAddEvent={addEvent} />
+              <EventForm
+                onAddEvent={addEvent}
+                onUpdateEvent={updateEvent}
+                editingEvent={editingEvent}
+                onCancelEdit={() => setEditingEvent(null)}
+              />
               <EventTimeline
                 events={events}
                 onRemoveEvent={removeEvent}
+                onEditEvent={setEditingEvent}
                 quote={quote}
               />
             </div>
