@@ -20,6 +20,7 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<"input" | "preview">("input");
   const [quote, setQuote] = useState<{ text: string; author: string } | null>(null);
+  const [statusMessage, setStatusMessage] = useState("");
 
   useEffect(() => {
     setQuote(getRandomQuote());
@@ -37,6 +38,7 @@ export default function Home() {
     if (events.length === 0) return;
     setIsGenerating(true);
     setError(null);
+    setStatusMessage("Creating your personalized storybook…");
 
     try {
       const res = await fetch("/api/generate", {
@@ -53,8 +55,10 @@ export default function Home() {
       const data: GeneratedStory = await res.json();
       setStory(data);
       setView("preview");
+      setStatusMessage("Your storybook is ready.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
+      setStatusMessage("");
     } finally {
       setIsGenerating(false);
     }
@@ -64,6 +68,7 @@ export default function Home() {
     if (!story) return;
     setIsImproving(true);
     setError(null);
+    setStatusMessage("Updating your story with your feedback…");
 
     try {
       const res = await fetch("/api/improve", {
@@ -79,8 +84,10 @@ export default function Home() {
 
       const data: GeneratedStory = await res.json();
       setStory(data);
+      setStatusMessage("Story updated.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
+      setStatusMessage("");
     } finally {
       setIsImproving(false);
     }
@@ -89,7 +96,6 @@ export default function Home() {
   async function downloadPdf() {
     if (!story) return;
 
-    // Dynamic import for client-side PDF generation
     const { pdf } = await import("@react-pdf/renderer");
     const { default: PdfDoc } = await import("@/components/PdfDocument");
     const blob = await pdf(<PdfDoc story={story} />).toBlob();
@@ -103,29 +109,24 @@ export default function Home() {
 
   return (
     <main className="min-h-screen">
-      {/* Header */}
       <header className="gradient-bg text-white py-6 px-4">
-        <div className="max-w-5xl mx-auto flex items-center justify-between">
+        <div className="max-w-5xl mx-auto flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">
-              MyLifeJourney
-            </h1>
+            <h1 className="text-2xl font-bold tracking-tight">MyLifeJourney</h1>
             <p className="text-indigo-100 text-sm mt-0.5">
               Your personalized life storybook
             </p>
-            {quote && (
-              <div className="mt-3">
-                <p className="text-yellow-300 italic font-medium text-base">
-                  &ldquo;{quote.text}&rdquo;
-                </p>
-                <p className="text-yellow-200/70 text-xs mt-1">&mdash; {quote.author}</p>
-              </div>
-            )}
           </div>
           {story && (
-            <div className="flex gap-2">
+            <div
+              className="flex flex-wrap gap-2"
+              role="group"
+              aria-label="Story views"
+            >
               <button
+                type="button"
                 onClick={() => setView("input")}
+                aria-pressed={view === "input"}
                 className={`px-4 py-2 rounded-full text-sm font-medium transition ${
                   view === "input"
                     ? "bg-white text-indigo-600"
@@ -135,7 +136,9 @@ export default function Home() {
                 Edit Events
               </button>
               <button
+                type="button"
                 onClick={() => setView("preview")}
+                aria-pressed={view === "preview"}
                 className={`px-4 py-2 rounded-full text-sm font-medium transition ${
                   view === "preview"
                     ? "bg-white text-indigo-600"
@@ -150,14 +153,28 @@ export default function Home() {
       </header>
 
       <div className="max-w-5xl mx-auto px-4 py-8">
+        <div
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          className="sr-only"
+        >
+          {statusMessage}
+        </div>
+
         {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 mb-6">
-            {error}
+          <div
+            role="alert"
+            className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 mb-6 flex items-start justify-between gap-3"
+          >
+            <p className="flex-1">{error}</p>
             <button
+              type="button"
               onClick={() => setError(null)}
-              className="ml-2 text-red-500 hover:text-red-700 font-bold"
+              aria-label="Dismiss error"
+              className="text-red-500 hover:text-red-700 font-bold leading-none px-1"
             >
-              x
+              ×
             </button>
           </div>
         )}
@@ -166,11 +183,16 @@ export default function Home() {
           <>
             <div className="grid md:grid-cols-2 gap-8">
               <EventForm onAddEvent={addEvent} />
-              <EventTimeline events={events} onRemoveEvent={removeEvent} />
+              <EventTimeline
+                events={events}
+                onRemoveEvent={removeEvent}
+                quote={quote}
+              />
             </div>
 
             <div className="text-center mt-8">
               <button
+                type="button"
                 onClick={generateStory}
                 className={`text-lg px-10 py-4 rounded-full font-semibold transition-all ${
                   events.length > 0
@@ -178,6 +200,7 @@ export default function Home() {
                     : "bg-indigo-100 text-indigo-400 border-2 border-dashed border-indigo-300 cursor-not-allowed"
                 }`}
                 disabled={isGenerating || events.length === 0}
+                aria-busy={isGenerating}
               >
                 {isGenerating
                   ? "Creating Your Storybook..."
@@ -189,7 +212,7 @@ export default function Home() {
                 </p>
               )}
               {isGenerating && (
-                <p className="text-sm text-gray-400 mt-3">
+                <p className="text-sm text-gray-400 mt-3" aria-hidden="true">
                   AI is crafting your personalized story...
                 </p>
               )}
@@ -207,9 +230,8 @@ export default function Home() {
         )}
       </div>
 
-      {/* Footer */}
       <footer className="text-center py-8 text-gray-400 text-sm">
-        <p>MyLifeJourney &mdash; Powered by Google Gemini AI</p>
+        <p>MyLifeJourney — Powered by Google Gemini AI</p>
       </footer>
     </main>
   );
