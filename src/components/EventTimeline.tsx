@@ -5,12 +5,14 @@ import { LifeEvent } from "@/types";
 interface EventTimelineProps {
   events: LifeEvent[];
   onRemoveEvent: (id: string) => void;
+  onEditEvent?: (event: LifeEvent) => void;
   quote?: { text: string; author: string } | null;
 }
 
 export default function EventTimeline({
   events,
   onRemoveEvent,
+  onEditEvent,
   quote,
 }: EventTimelineProps) {
   if (events.length === 0) {
@@ -82,14 +84,26 @@ export default function EventTimeline({
                   />
                 )}
               </div>
-              <button
-                type="button"
-                onClick={() => onRemoveEvent(event.id)}
-                className="text-xs text-red-400 hover:text-red-600 mt-2 transition"
-                aria-label={`Remove event ${event.title}`}
-              >
-                Remove
-              </button>
+              <div className="flex gap-3 mt-2">
+                {onEditEvent && (
+                  <button
+                    type="button"
+                    onClick={() => onEditEvent(event)}
+                    className="text-xs text-indigo-500 hover:text-indigo-700 transition"
+                    aria-label={`Edit event ${event.title}`}
+                  >
+                    Edit
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => onRemoveEvent(event.id)}
+                  className="text-xs text-red-400 hover:text-red-600 transition"
+                  aria-label={`Remove event ${event.title}`}
+                >
+                  Remove
+                </button>
+              </div>
             </div>
           </div>
         ))}
