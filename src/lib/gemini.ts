@@ -1,6 +1,13 @@
 import { GoogleGenAI } from "@google/genai";
 import { LifeEvent, StoryPage } from "@/types";
 
+/** Gemini 2.5* is limited to prior users; new API keys get 404 NOT_FOUND. */
+const DEFAULT_MODEL = "gemini-3.5-flash";
+
+function getModel(): string {
+  return process.env.GEMINI_MODEL?.trim() || DEFAULT_MODEL;
+}
+
 function getClient() {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -46,7 +53,7 @@ Respond in JSON format with this exact structure:
 Make the narratives personal, warm, and vivid. Each narrative should be 2-3 paragraphs that paint a picture of the moment. Use sensory details and emotions.`;
 
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: getModel(),
     contents: prompt,
     config: {
       responseMimeType: "application/json",
@@ -105,7 +112,7 @@ Respond in JSON format with this exact structure:
 }`;
 
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: getModel(),
     contents: prompt,
     config: {
       responseMimeType: "application/json",
