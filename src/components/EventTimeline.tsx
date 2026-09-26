@@ -7,6 +7,7 @@ interface EventTimelineProps {
   events: LifeEvent[];
   onRemoveEvent: (id: string) => void;
   onEditEvent?: (event: LifeEvent) => void;
+  onLoadSample?: () => void;
   quote?: { text: string; author: string } | null;
 }
 
@@ -14,6 +15,7 @@ export default function EventTimeline({
   events,
   onRemoveEvent,
   onEditEvent,
+  onLoadSample,
   quote,
 }: EventTimelineProps) {
   if (events.length === 0) {
@@ -24,6 +26,20 @@ export default function EventTimeline({
         </div>
         <p className="text-lg text-gray-500">Your life events will appear here</p>
         <p className="text-sm mt-1">Add your first event to get started</p>
+        {onLoadSample && (
+          <div className="mt-6">
+            <button
+              type="button"
+              onClick={onLoadSample}
+              className="btn-secondary text-sm px-5 py-2.5"
+            >
+              Try a sample story
+            </button>
+            <p className="text-xs text-gray-400 mt-2 max-w-xs mx-auto">
+              Loads two demo moments so you can Generate without writing from scratch
+            </p>
+          </div>
+        )}
         {quote && (
           <blockquote className="mt-8 max-w-sm mx-auto px-4">
             <p className="font-story text-sm italic text-indigo-400/90 leading-relaxed">
