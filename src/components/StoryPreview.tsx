@@ -45,7 +45,7 @@ export default function StoryPreview({
               Chapter {page.pageNumber}
             </p>
             <h3 className="text-xl font-bold text-gray-800 mb-1">{page.title}</h3>
-            <p className="text-sm text of-gray-400 mb-4 font-sans">
+            <p className="text-sm text-gray-400 mb-4 font-sans">
               {formatCalendarDate(page.date)}
             </p>
 
