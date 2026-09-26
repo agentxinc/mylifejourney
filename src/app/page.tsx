@@ -7,6 +7,7 @@ import EventTimeline from "@/components/EventTimeline";
 import StoryPreview from "@/components/StoryPreview";
 import { LifeEvent, GeneratedStory } from "@/types";
 import { getRandomQuote } from "@/lib/quotes";
+import { createSampleEvents } from "@/lib/sample-events";
 
 const STORAGE_KEY = "mylifejourney-events";
 
@@ -81,6 +82,14 @@ export default function Home() {
   const removeEvent = useCallback((id: string) => {
     setEvents((prev) => prev.filter((e) => e.id !== id));
     setEditingEvent((current) => (current?.id === id ? null : current));
+  }, []);
+
+  const loadSampleEvents = useCallback(() => {
+    setEditingEvent(null);
+    setEvents(createSampleEvents());
+    setStatusMessage(
+      "Sample story loaded. Two demo events are on your timeline — you can Generate or edit them."
+    );
   }, []);
 
   async function generateStory() {
@@ -241,6 +250,7 @@ export default function Home() {
                 events={events}
                 onRemoveEvent={removeEvent}
                 onEditEvent={setEditingEvent}
+                onLoadSample={loadSampleEvents}
                 quote={quote}
               />
             </div>
@@ -263,7 +273,8 @@ export default function Home() {
               </button>
               {events.length === 0 && (
                 <p className="text-sm text-gray-400 mt-3">
-                  Add at least one life event above to generate your storybook
+                  Add at least one life event above, or try a sample story, to
+                  generate your storybook
                 </p>
               )}
               {isGenerating && (
