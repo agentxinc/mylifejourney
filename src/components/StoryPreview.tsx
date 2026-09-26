@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { GeneratedStory } from "@/types";
+import { formatCalendarDate } from "@/lib/dates";
 
 interface StoryPreviewProps {
   story: GeneratedStory;
@@ -45,11 +46,7 @@ export default function StoryPreview({
             </p>
             <h3 className="text-xl font-bold text-gray-800 mb-1">{page.title}</h3>
             <p className="text-sm text-gray-400 mb-4 font-sans">
-              {new Date(page.date).toLocaleDateString("en-US", {
-                year: "numeric",
-                month: "long",
-                day: "numeric",
-              })}
+              {formatCalendarDate(page.date)}
             </p>
 
             {page.imageUrl && (

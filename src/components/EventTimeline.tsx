@@ -1,6 +1,7 @@
 "use client";
 
 import { LifeEvent } from "@/types";
+import { formatCalendarDate, parseCalendarDate } from "@/lib/dates";
 
 interface EventTimelineProps {
   events: LifeEvent[];
@@ -38,7 +39,8 @@ export default function EventTimeline({
   }
 
   const sorted = [...events].sort(
-    (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+    (a, b) =>
+      parseCalendarDate(a.date).getTime() - parseCalendarDate(b.date).getTime()
   );
 
   return (
@@ -65,11 +67,7 @@ export default function EventTimeline({
               <div className="flex justify-between items-start">
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-medium text-indigo-500 mb-1">
-                    {new Date(event.date).toLocaleDateString("en-US", {
-                      year: "numeric",
-                      month: "long",
-                      day: "numeric",
-                    })}
+                    {formatCalendarDate(event.date)}
                   </p>
                   <h3 className="font-bold text-gray-800">{event.title}</h3>
                   <p className="text-sm text-gray-600 mt-1 line-clamp-2">

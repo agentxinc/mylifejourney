@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import exifr from "exifr";
 import { LifeEvent } from "@/types";
+import { toDateInputValue } from "@/lib/dates";
 
 interface EventFormProps {
   onAddEvent: (event: LifeEvent) => void;
@@ -64,8 +65,8 @@ export default function EventForm({
         exifData?.CreateDate ||
         exifData?.ModifyDate;
       if (exifDate && exifDate instanceof Date) {
-        const formatted = exifDate.toISOString().split("T")[0];
-        setDate(formatted);
+        // Local calendar day — not toISOString (UTC can shift the day)
+        setDate(toDateInputValue(exifDate));
         setDateSource("exif");
       }
     } catch {
