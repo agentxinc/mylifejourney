@@ -7,9 +7,9 @@ import {
   View,
   StyleSheet,
   Image,
-  Font,
 } from "@react-pdf/renderer";
 import { GeneratedStory } from "@/types";
+import { formatCalendarDate } from "@/lib/dates";
 
 const styles = StyleSheet.create({
   page: {
@@ -146,11 +146,7 @@ export default function PdfDocument({ story }: PdfDocumentProps) {
             </Text>
             <Text style={styles.chapterTitle}>{page.title}</Text>
             <Text style={styles.chapterDate}>
-              {new Date(page.date).toLocaleDateString("en-US", {
-                year: "numeric",
-                month: "long",
-                day: "numeric",
-              })}
+              {formatCalendarDate(page.date)}
             </Text>
             <View style={styles.separator} />
 
