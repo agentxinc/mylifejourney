@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { BadReplyError, parseStoryText, describeResponse } from "../src/lib/parse-story.mjs";
+import { BadReplyError, MAX_REPLY_CHARS, parseStoryText, describeResponse } from "../src/lib/parse-story.mjs";
 import { EmptyResultError, classifyError } from "../src/lib/generate-errors.mjs";
 
 const page = { eventId: "1", title: "Arrival", date: "2018-08-15", narrative: "N", pageNumber: 1 };
@@ -76,4 +76,15 @@ test("pathological input stays fast", () => {
     assert.throws(() => parseStoryText(s));
   }
   assert.ok(Date.now() - t < 2000);
+});
+
+test("replies over the size limit are refused before parsing, and the log skips parsing too", () => {
+  const huge = JSON.stringify(story) + " x".repeat(MAX_REPLY_CHARS);
+  const t = Date.now();
+  assert.throws(() => parseStoryText(huge), (e) => e instanceof BadReplyError && e.message === "reply too large");
+  const nested = "[".repeat(3e6) + "]".repeat(3e6);
+  assert.throws(() => parseStoryText(nested), BadReplyError);
+  assert.equal(describeResponse(nested).parsed, false);
+  assert.ok(Date.now() - t < 200);
+  assert.equal(parseStoryText(JSON.stringify(story)).title, "T");
 });

@@ -25,12 +25,18 @@ export class BadReplyError extends Error {
 export function parseStoryText(text) {
   const raw = (text ?? "").trim();
   if (!raw) throw new BadReplyError("empty response");
+  // A real story is far smaller (output is capped at 16k tokens); refuse huge
+  // replies before any parsing so junk can't cost seconds of CPU.
+  if (raw.length > MAX_REPLY_CHARS) throw new BadReplyError("reply too large");
   const value = parseLoose(raw);
   if (value === undefined) throw new BadReplyError("invalid JSON");
   const story = findStory(value);
   if (!story) throw new EmptyResultError("no pages");
   return story;
 }
+
+/** Upper bound on a reply we will try to parse (~3x the 16k-token output cap). */
+export const MAX_REPLY_CHARS = 200_000;
 
 const MAX_STARTS = 20;
 const MAX_ENDS = 20;
@@ -148,7 +154,7 @@ function numbered(pages) {
  */
 export function describeResponse(text, meta = {}) {
   const raw = (text ?? "").trim();
-  const v = raw ? parseLoose(raw) : undefined;
+  const v = raw && raw.length <= MAX_REPLY_CHARS ? parseLoose(raw) : undefined;
   const isObj = !!v && typeof v === "object" && !Array.isArray(v);
   const first = raw.slice(0, 1);
   return {
