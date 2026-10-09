@@ -126,6 +126,8 @@ export default function Home() {
   const busyStreak = useRef(0);
   const errorSeq = useRef(0);
   const generateBtnRef = useRef<HTMLButtonElement>(null);
+  const pendingFocus = useRef(false);
+  const wasWaiting = useRef(false);
   const [view, setView] = useState<"input" | "preview">("input");
   const [quote, setQuote] = useState<{ text: string; author: string } | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
@@ -177,15 +179,27 @@ export default function Home() {
 
   // BUSY countdown: tick once a second; announce only the end.
   useEffect(() => {
-    if (busyWait <= 0) return;
-    const t = setTimeout(() => {
-      setBusyWait((n) => {
-        if (n <= 1) setStatusMessage("You can try again now.");
-        return n - 1;
-      });
-    }, 1000);
-    return () => clearTimeout(t);
+    if (busyWait > 0) {
+      wasWaiting.current = true;
+      const t = setTimeout(() => setBusyWait((n) => Math.max(0, n - 1)), 1000);
+      return () => clearTimeout(t);
+    }
+    if (wasWaiting.current) {
+      wasWaiting.current = false;
+      setStatusMessage("You can try again now.");
+    }
   }, [busyWait]);
+
+  // Move focus to "Try again" only once the button is actually enabled
+  // (after isGenerating clears, and after any BUSY countdown ends).
+  useEffect(() => {
+    if (!pendingFocus.current || isGenerating || busyWait > 0) return;
+    const btn = generateBtnRef.current;
+    if (btn && !btn.disabled) {
+      btn.focus();
+      pendingFocus.current = false;
+    }
+  }, [isGenerating, busyWait, error]);
 
   function showError(err: unknown, flow: Flow) {
     const e = asClientError(err);
@@ -208,22 +222,25 @@ export default function Home() {
       // Let EventForm render the event before focusing the field.
       setTimeout(() => document.getElementById(`event-${e.field}`)?.focus(), 0);
     } else if (flow === "generate") {
-      setTimeout(() => generateBtnRef.current?.focus(), 0);
+      pendingFocus.current = true;
     }
   }
 
-  async function runRequest(flow: Flow, run: () => Promise<void>) {
+  async function runRequest(flow: Flow, run: () => Promise<void>): Promise<boolean> {
     // One request at a time: a ref updates synchronously, unlike `disabled`.
-    if (inFlight.current || busyWait > 0) return;
+    if (inFlight.current || busyWait > 0) return false;
     inFlight.current = true;
+    pendingFocus.current = false;
     setError(null);
     setShowSlowHint(false);
     const slowTimer = setTimeout(() => setShowSlowHint(true), SLOW_HINT_MS);
     try {
       await run();
       busyStreak.current = 0;
+      return true;
     } catch (err) {
       showError(err, flow);
+      return false;
     } finally {
       clearTimeout(slowTimer);
       setShowSlowHint(false);
@@ -245,17 +262,19 @@ export default function Home() {
     setIsGenerating(false);
   }
 
-  async function improveStory(feedback: string) {
-    if (!story || inFlight.current || busyWait > 0) return;
+  /** Resolves true on success so StoryPreview keeps the typed feedback on failure. */
+  async function improveStory(feedback: string): Promise<boolean> {
+    if (!story || inFlight.current || busyWait > 0) return false;
     setIsImproving(true);
     setStatusMessage("Updating your story with your feedback…");
-    await runRequest("improve", async () => {
+    const ok = await runRequest("improve", async () => {
       // On any failure `story` is left as-is, so the original is unchanged.
       const data = await postForStory("/api/improve", { story, feedback });
       setStory(data);
       setStatusMessage("Story updated.");
     });
     setIsImproving(false);
+    return ok;
   }
 
   async function downloadPdf() {
@@ -339,7 +358,7 @@ export default function Home() {
               {error.code === "BAD_INPUT" && error.field && (
                 <> {FIELD_HINTS[error.field]}</>
               )}
-              {error.waitSec ? <> You can try again in {error.waitSec} seconds.</> : null}
+              {error.waitSec && busyWait > 0 ? <> You can try again in {error.waitSec} seconds.</> : null}
             </p>
             <button
               type="button"
