@@ -1,47 +1,55 @@
 import { NextRequest, NextResponse } from "next/server";
 import { improveStory } from "@/lib/gemini";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
+import {
+  SERVER_TIMEOUT_MS,
+  classifyError,
+  errorPayload,
+  getMock,
+  logSafe,
+  mockResponse,
+  withTimeout,
+} from "@/lib/generate-errors.mjs";
 import { StoryPage } from "@/types";
 
+// Keep above SERVER_TIMEOUT_MS (25s); see /api/generate.
+export const maxDuration = 60;
+
+function reply(p: ReturnType<typeof errorPayload>) {
+  return NextResponse.json(p.body, { status: p.status, headers: p.headers });
+}
+
 export async function POST(request: NextRequest) {
+  const mock = getMock(request.url, process.env.VERCEL_ENV);
+  if (mock) return mockResponse(mock);
+
   const ip = getClientIp(request);
   const rate = checkRateLimit(`improve:${ip}`);
   if (!rate.allowed) {
-    return NextResponse.json(
-      { error: "Too many requests. Please try again shortly." },
-      {
-        status: 429,
-        headers: { "Retry-After": String(rate.retryAfterSec) },
-      }
-    );
+    return reply(errorPayload("BUSY", { retryAfterSec: rate.retryAfterSec }));
+  }
+
+  let story: { title: string; subtitle: string; pages: StoryPage[] };
+  let feedback: string;
+  try {
+    ({ story, feedback } = await request.json());
+  } catch {
+    return reply(errorPayload("BAD_INPUT"));
+  }
+
+  if (!story || !Array.isArray(story.pages) || typeof feedback !== "string" || !feedback.trim()) {
+    return reply(errorPayload("BAD_INPUT", { field: "feedback" }));
   }
 
   try {
-    const {
-      story,
-      feedback,
-    }: {
-      story: { title: string; subtitle: string; pages: StoryPage[] };
-      feedback: string;
-    } = await request.json();
-
-    if (!story || !feedback) {
-      return NextResponse.json(
-        { error: "Story and feedback are required" },
-        { status: 400 }
-      );
-    }
-
-    const improved = await improveStory(story, feedback);
-
+    const improved = await withTimeout(improveStory(story, feedback), SERVER_TIMEOUT_MS);
     return NextResponse.json({
       ...improved,
       generatedAt: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("Story improvement error:", error);
-    const message =
-      error instanceof Error ? error.message : "Failed to improve story";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const code = classifyError(error);
+    logSafe("improve", code, error);
+    return reply(errorPayload(code));
   }
 }

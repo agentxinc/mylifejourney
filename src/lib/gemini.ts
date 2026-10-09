@@ -1,5 +1,21 @@
 import { GoogleGenAI } from "@google/genai";
 import { LifeEvent, StoryPage } from "@/types";
+import { EmptyResultError } from "@/lib/generate-errors.mjs";
+
+/** Parse Gemini JSON; throw EmptyResultError when there is no usable story. */
+function parseStoryJson(text: string): { title?: string; subtitle?: string; pages: StoryPage[] } {
+  if (!text.trim()) throw new EmptyResultError("empty response");
+  let parsed: { title?: string; subtitle?: string; pages?: unknown };
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new EmptyResultError("invalid JSON");
+  }
+  if (!Array.isArray(parsed?.pages) || parsed.pages.length === 0) {
+    throw new EmptyResultError("no pages");
+  }
+  return parsed as { title?: string; subtitle?: string; pages: StoryPage[] };
+}
 
 /** Gemini 2.5* is limited to prior users; new API keys get 404 NOT_FOUND. */
 const DEFAULT_MODEL = "gemini-3.5-flash";
@@ -60,8 +76,7 @@ Make the narratives personal, warm, and vivid. Each narrative should be 2-3 para
     },
   });
 
-  const text = response.text ?? "";
-  const parsed = JSON.parse(text);
+  const parsed = parseStoryJson(response.text ?? "");
 
   // Map back the image URLs from original events
   const pages: StoryPage[] = parsed.pages.map(
@@ -73,8 +88,8 @@ Make the narratives personal, warm, and vivid. Each narrative should be 2-3 para
   );
 
   return {
-    title: parsed.title,
-    subtitle: parsed.subtitle,
+    title: parsed.title ?? "",
+    subtitle: parsed.subtitle ?? "",
     pages,
   };
 }
@@ -119,8 +134,7 @@ Respond in JSON format with this exact structure:
     },
   });
 
-  const text = response.text ?? "";
-  const parsed = JSON.parse(text);
+  const parsed = parseStoryJson(response.text ?? "");
 
   // Preserve image URLs from current story
   const pages: StoryPage[] = parsed.pages.map(
@@ -131,8 +145,8 @@ Respond in JSON format with this exact structure:
   );
 
   return {
-    title: parsed.title,
-    subtitle: parsed.subtitle,
+    title: parsed.title ?? currentStory.title,
+    subtitle: parsed.subtitle ?? currentStory.subtitle,
     pages,
   };
 }
