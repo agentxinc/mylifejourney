@@ -29,11 +29,15 @@ export function parseStoryText(text) {
   // replies before any parsing so junk can't cost seconds of CPU.
   if (raw.length > MAX_REPLY_CHARS) throw new BadReplyError("reply too large");
   const value = parseLoose(raw);
+  // Keep the parse only on failure (for the shape log); a good story is never held.
   lastParse = { raw, value };
+  const story = value === undefined ? null : findStory(value);
+  if (story) {
+    lastParse = EMPTY_PARSE;
+    return story;
+  }
   if (value === undefined) throw new BadReplyError("invalid JSON");
-  const story = findStory(value);
-  if (!story) throw new EmptyResultError("no pages");
-  return story;
+  throw new EmptyResultError("no pages");
 }
 
 /**
@@ -45,7 +49,8 @@ export function parseStoryText(text) {
 export const MAX_REPLY_CHARS = 128_000;
 
 /** The last parse, so the shape log after a failure doesn't parse again. */
-let lastParse = { raw: "", value: /** @type {unknown} */ (undefined) };
+const EMPTY_PARSE = { raw: "", value: /** @type {unknown} */ (undefined) };
+let lastParse = EMPTY_PARSE;
 
 const MAX_STARTS = 20;
 const MAX_ENDS = 20;
@@ -165,6 +170,7 @@ export function describeResponse(text, meta = {}) {
   const raw = (text ?? "").trim();
   const v =
     !raw || raw.length > MAX_REPLY_CHARS ? undefined : raw === lastParse.raw ? lastParse.value : parseLoose(raw);
+  lastParse = EMPTY_PARSE; // don't keep user text in memory after logging
   const isObj = !!v && typeof v === "object" && !Array.isArray(v);
   const first = raw.slice(0, 1);
   return {
