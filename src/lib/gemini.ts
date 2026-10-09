@@ -1,20 +1,28 @@
 import { GoogleGenAI } from "@google/genai";
 import { LifeEvent, StoryPage } from "@/types";
 import { EmptyResultError } from "@/lib/generate-errors.mjs";
+import { describeResponse, parseStoryText } from "@/lib/parse-story.mjs";
 
-/** Parse Gemini JSON; throw EmptyResultError when there is no usable story. */
-function parseStoryJson(text: string): { title?: string; subtitle?: string; pages: StoryPage[] } {
-  if (!text.trim()) throw new EmptyResultError("empty response");
-  let parsed: { title?: string; subtitle?: string; pages?: unknown };
+/** Parse Gemini's reply; on failure log the response shape (never its text) and rethrow. */
+function parseStoryJson(
+  route: string,
+  response: { text?: string; candidates?: { finishReason?: unknown }[] }
+): { title?: string; subtitle?: string; pages: StoryPage[] } {
+  const text = response.text ?? "";
   try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new EmptyResultError("invalid JSON");
+    return parseStoryText(text) as { title?: string; subtitle?: string; pages: StoryPage[] };
+  } catch (err) {
+    if (err instanceof EmptyResultError) {
+      console.error(
+        JSON.stringify({
+          route,
+          parse: err.message,
+          ...describeResponse(text, response.candidates?.[0]?.finishReason),
+        })
+      );
+    }
+    throw err;
   }
-  if (!Array.isArray(parsed?.pages) || parsed.pages.length === 0) {
-    throw new EmptyResultError("no pages");
-  }
-  return parsed as { title?: string; subtitle?: string; pages: StoryPage[] };
 }
 
 /** Gemini 2.5* is limited to prior users; new API keys get 404 NOT_FOUND. */
@@ -80,7 +88,7 @@ Make the narratives personal, warm, and vivid. Each narrative should be 2-3 para
     },
   });
 
-  const parsed = parseStoryJson(response.text ?? "");
+  const parsed = parseStoryJson("generate", response);
 
   // Map back the image URLs from original events
   const pages: StoryPage[] = parsed.pages.map(
@@ -142,7 +150,7 @@ Respond in JSON format with this exact structure:
     },
   });
 
-  const parsed = parseStoryJson(response.text ?? "");
+  const parsed = parseStoryJson("improve", response);
 
   // Preserve image URLs from current story
   const pages: StoryPage[] = parsed.pages.map(
