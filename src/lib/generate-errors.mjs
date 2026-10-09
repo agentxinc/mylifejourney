@@ -123,7 +123,8 @@ export function withTimeout(task, ms) {
  */
 export function classifyError(err) {
   if (err instanceof TimeoutError) return "TIMEOUT";
-  if (err instanceof EmptyResultError || err instanceof SyntaxError) return "EMPTY";
+  // Only a readable reply with no pages is EMPTY; unreadable replies are on us (SERVER).
+  if (err instanceof EmptyResultError) return "EMPTY";
   const e = /** @type {{ status?: unknown, code?: unknown, message?: unknown, name?: unknown } | null} */ (err);
   const status = Number(e?.status ?? e?.code);
   const message = typeof e?.message === "string" ? e.message : "";
