@@ -9,6 +9,7 @@ import { LifeEvent, GeneratedStory } from "@/types";
 import { getRandomQuote } from "@/lib/quotes";
 import { createSampleEvents } from "@/lib/sample-events";
 import {
+  BUSY_WAIT_COPY,
   CLIENT_TIMEOUT_MS,
   DEFAULT_BUSY_WAIT_SEC,
   FIELD_HINTS,
@@ -22,14 +23,28 @@ import {
 
 type ClientError = ReturnType<typeof parseErrorResponse>;
 type Flow = "generate" | "improve";
-type ShownError = ClientError & { flow: Flow; id: number; waitSec?: number; eventTitle?: string };
+type ShownError = ClientError & {
+  flow: Flow;
+  id: number;
+  waitSec?: number;
+  eventTitle?: string;
+  opened?: boolean;
+};
 
 /** Names the entry and field, since focus leaves the alert for the field. */
-function fieldHint(field: "title" | "date", eventTitle?: string): string {
+function fieldHint(field: "title" | "date", eventTitle: string | undefined, opened: boolean): string {
   const name = eventTitle?.trim();
   if (field === "date" && name) return `Add a date for \u201c${name}\u201d.`;
-  if (field === "title") return "Add a title for the entry now open in the form.";
+  if (field === "title") {
+    return opened
+      ? "Add a title for the entry now open in the form."
+      : "Add a title to each entry, then try again.";
+  }
   return FIELD_HINTS[field];
+}
+
+function prefersReducedMotion(): boolean {
+  return typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 }
 
 /** Test-only: forwards `?mock=` from the page URL; the server ignores it in Production. */
@@ -198,16 +213,16 @@ export default function Home() {
     }
   }, [busyWait]);
 
-  // Move focus to "Try again" only once the button is actually enabled
-  // (after isGenerating clears, and after any BUSY countdown ends).
+  // Move focus to "Try again" once the request has finished. During a BUSY
+  // countdown the button is aria-disabled (not disabled), so it keeps focus.
   useEffect(() => {
-    if (!pendingFocus.current || isGenerating || busyWait > 0) return;
+    if (!pendingFocus.current || isGenerating) return;
     const btn = generateBtnRef.current;
     if (btn && !btn.disabled) {
       btn.focus();
       pendingFocus.current = false;
     }
-  }, [isGenerating, busyWait, error]);
+  }, [isGenerating, error]);
 
   function showError(err: unknown, flow: Flow) {
     const e = asClientError(err);
@@ -225,7 +240,7 @@ export default function Home() {
         ? events.find((ev) => ev.id === e.eventId)
         : undefined;
     // The alert announces the start of the wait once; ticks are visual only.
-    setError({ ...e, flow, id: errorSeq.current, waitSec, eventTitle: target?.title });
+    setError({ ...e, flow, id: errorSeq.current, waitSec, eventTitle: target?.title, opened: !!target });
     if (waitSec) setBusyWait(waitSec);
     setStatusMessage("");
     if (flow === "generate" && e.code === "BAD_INPUT" && e.field) {
@@ -233,7 +248,7 @@ export default function Home() {
       // Let EventForm render the event, then bring the field on screen and focus it.
       setTimeout(() => {
         const el = document.getElementById(`event-${e.field}`);
-        el?.scrollIntoView({ block: "center", behavior: "smooth" });
+        el?.scrollIntoView({ block: "center", behavior: prefersReducedMotion() ? "auto" : "smooth" });
         el?.focus({ preventScroll: true });
       }, 0);
     } else if (flow === "generate") {
@@ -369,15 +384,20 @@ export default function Home() {
           >
             <span aria-hidden="true" className="leading-none">⚠️</span>
             <p className="flex-1">
-              {(error.flow === "improve" ? IMPROVE_ERROR_COPY : GENERATE_ERROR_COPY)[error.code]}
+              {error.code === "BUSY" && error.waitSec
+                ? BUSY_WAIT_COPY
+                : (error.flow === "improve" ? IMPROVE_ERROR_COPY : GENERATE_ERROR_COPY)[error.code]}
               {error.code === "BAD_INPUT" && error.field && (
-                <> {fieldHint(error.field, error.eventTitle)}</>
+                <> {fieldHint(error.field, error.eventTitle, !!error.opened)}</>
               )}
-              {error.waitSec && busyWait > 0 ? <> You can try again in {error.waitSec} seconds.</> : null}
             </p>
             <button
               type="button"
-              onClick={() => setError(null)}
+              onClick={() => {
+                // Dismissing also cancels the pending move to "Try again".
+                pendingFocus.current = false;
+                setError(null);
+              }}
               aria-label="Dismiss error"
               className="text-amber-700 hover:text-amber-900 font-bold leading-none px-1"
             >
@@ -411,10 +431,13 @@ export default function Home() {
                 onClick={generateStory}
                 className={`text-lg px-10 py-4 rounded-full font-semibold transition-all ${
                   events.length > 0
-                    ? "btn-primary"
+                    ? `btn-primary${busyWait > 0 ? " opacity-60 cursor-not-allowed" : ""}`
                     : "bg-indigo-100 text-indigo-400 border-2 border-dashed border-indigo-300 cursor-not-allowed"
                 }`}
-                disabled={isGenerating || events.length === 0 || busyWait > 0}
+                // aria-disabled during the countdown keeps focus on the button;
+                // generateStory() ignores clicks while busyWait > 0.
+                disabled={isGenerating || events.length === 0}
+                aria-disabled={busyWait > 0 || undefined}
                 aria-busy={isGenerating}
               >
                 {isGenerating

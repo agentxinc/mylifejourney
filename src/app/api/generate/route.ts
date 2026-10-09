@@ -25,8 +25,7 @@ export async function POST(request: NextRequest) {
   const mock = getMock(request.url, process.env.VERCEL_ENV);
   if (mock) {
     const body = await request.json().catch(() => null);
-    const firstEventId = typeof body?.events?.[0]?.id === "string" ? body.events[0].id : undefined;
-    return mockResponse(mock, { firstEventId });
+    return mockResponse(mock, { events: body?.events });
   }
 
   const ip = getClientIp(request);
