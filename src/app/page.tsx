@@ -22,7 +22,15 @@ import {
 
 type ClientError = ReturnType<typeof parseErrorResponse>;
 type Flow = "generate" | "improve";
-type ShownError = ClientError & { flow: Flow; id: number; waitSec?: number };
+type ShownError = ClientError & { flow: Flow; id: number; waitSec?: number; eventTitle?: string };
+
+/** Names the entry and field, since focus leaves the alert for the field. */
+function fieldHint(field: "title" | "date", eventTitle?: string): string {
+  const name = eventTitle?.trim();
+  if (field === "date" && name) return `Add a date for \u201c${name}\u201d.`;
+  if (field === "title") return "Add a title for the entry now open in the form.";
+  return FIELD_HINTS[field];
+}
 
 /** Test-only: forwards `?mock=` from the page URL; the server ignores it in Production. */
 function apiPath(path: string): string {
@@ -212,15 +220,22 @@ export default function Home() {
     } else {
       busyStreak.current = 0;
     }
+    const target =
+      flow === "generate" && e.code === "BAD_INPUT" && e.eventId
+        ? events.find((ev) => ev.id === e.eventId)
+        : undefined;
     // The alert announces the start of the wait once; ticks are visual only.
-    setError({ ...e, flow, id: errorSeq.current, waitSec });
+    setError({ ...e, flow, id: errorSeq.current, waitSec, eventTitle: target?.title });
     if (waitSec) setBusyWait(waitSec);
     setStatusMessage("");
     if (flow === "generate" && e.code === "BAD_INPUT" && e.field) {
-      const target = e.eventId ? events.find((ev) => ev.id === e.eventId) : undefined;
       if (target) setEditingEvent(target);
-      // Let EventForm render the event before focusing the field.
-      setTimeout(() => document.getElementById(`event-${e.field}`)?.focus(), 0);
+      // Let EventForm render the event, then bring the field on screen and focus it.
+      setTimeout(() => {
+        const el = document.getElementById(`event-${e.field}`);
+        el?.scrollIntoView({ block: "center", behavior: "smooth" });
+        el?.focus({ preventScroll: true });
+      }, 0);
     } else if (flow === "generate") {
       pendingFocus.current = true;
     }
@@ -356,7 +371,7 @@ export default function Home() {
             <p className="flex-1">
               {(error.flow === "improve" ? IMPROVE_ERROR_COPY : GENERATE_ERROR_COPY)[error.code]}
               {error.code === "BAD_INPUT" && error.field && (
-                <> {FIELD_HINTS[error.field]}</>
+                <> {fieldHint(error.field, error.eventTitle)}</>
               )}
               {error.waitSec && busyWait > 0 ? <> You can try again in {error.waitSec} seconds.</> : null}
             </p>
