@@ -87,19 +87,26 @@ export class EmptyResultError extends Error {
 }
 
 /**
+ * Run `task(signal)` with a hard cutoff. When `ms` passes, the signal is
+ * aborted (so the upstream HTTP call is cancelled and the function stops
+ * waiting) and the returned promise rejects with TimeoutError.
  * @template T
- * @param {Promise<T>} promise
+ * @param {(signal: AbortSignal) => Promise<T>} task
  * @param {number} ms
  * @returns {Promise<T>}
  */
-export function withTimeout(promise, ms) {
+export function withTimeout(task, ms) {
+  const controller = new AbortController();
   /** @type {ReturnType<typeof setTimeout> | undefined} */
   let timer;
   return Promise.race([
-    promise,
+    task(controller.signal),
     /** @type {Promise<T>} */ (
       new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new TimeoutError()), ms);
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new TimeoutError());
+        }, ms);
       })
     ),
   ]).finally(() => clearTimeout(timer));
@@ -200,11 +207,13 @@ export function getMock(url, vercelEnv) {
 
 /**
  * Build the mock response. "slow" waits 35s first (past the page's 30s cutoff).
+ * `firstEventId` lets `bad` point at a real event on the page.
  * @param {MockValue} mock
- * @param {(ms: number) => Promise<void>} [sleep]
+ * @param {{ sleep?: (ms: number) => Promise<void>, firstEventId?: string }} [opts]
  * @returns {Promise<Response>}
  */
-export async function mockResponse(mock, sleep = (ms) => new Promise((r) => setTimeout(r, ms))) {
+export async function mockResponse(mock, opts = {}) {
+  const sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   /** @param {ErrorPayload} p */
   const json = (p) =>
     new Response(JSON.stringify(p.body), {
@@ -214,7 +223,7 @@ export async function mockResponse(mock, sleep = (ms) => new Promise((r) => setT
   switch (mock) {
     case "busy": return json(errorPayload("BUSY", { retryAfterSec: 30 }));
     case "timeout": return json(errorPayload("TIMEOUT"));
-    case "bad": return json(errorPayload("BAD_INPUT", { field: "events[0].date" }));
+    case "bad": return json(errorPayload("BAD_INPUT", { field: "events[0].date", eventId: opts.firstEventId }));
     case "empty": return json(errorPayload("EMPTY"));
     case "500": return json(errorPayload("SERVER"));
     case "html504":

@@ -37,7 +37,10 @@ test("BUSY: Gemini quota / 429 / 503 map to BUSY with Retry-After", async () => 
 });
 
 test("TIMEOUT: our own cutoff and Gemini deadline map to TIMEOUT", async () => {
-  await assert.rejects(withTimeout(new Promise(() => {}), 10), TimeoutError);
+  let seen;
+  await assert.rejects(withTimeout((signal) => { seen = signal; return new Promise(() => {}); }, 10), TimeoutError);
+  assert.equal(seen.aborted, true, "cutoff aborts the upstream call");
+  assert.equal(await withTimeout(async (signal) => (signal.aborted ? "x" : "ok"), 50), "ok");
   assert.equal(classifyError(new TimeoutError()), "TIMEOUT");
   assert.equal(classifyError(new Error("DEADLINE_EXCEEDED")), "TIMEOUT");
   assert.equal((await roundTrip(await mockResponse("timeout"))).code, "TIMEOUT");
@@ -91,10 +94,15 @@ test("platform errors with non-JSON bodies are mapped by status", async () => {
 
 test("slow mock waits 35s (past the 30s page cutoff) before answering", async () => {
   let slept = 0;
-  const res = await mockResponse("slow", async (ms) => { slept = ms; });
+  const res = await mockResponse("slow", { sleep: async (ms) => { slept = ms; } });
   assert.equal(slept, 35_000);
   assert.ok(slept > CLIENT_TIMEOUT_MS);
   assert.equal(res.status, 504);
+});
+
+test("mock bad points at the first real event when one is sent", async () => {
+  const parsed = await roundTrip(await mockResponse("bad", { firstEventId: "ev-1" }));
+  assert.deepEqual(parsed, { code: "BAD_INPUT", field: "date", eventId: "ev-1" });
 });
 
 test("mock switch: honored locally/Preview, ignored in Production", () => {
