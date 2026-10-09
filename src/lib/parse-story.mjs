@@ -37,11 +37,12 @@ export function parseStoryText(text) {
 }
 
 /**
- * Upper bound on a reply we will try to parse. The 16k-token output cap is
- * roughly 64k characters, so a real reply can't be bigger; this keeps the
- * worst case (deeply nested JSON just under the limit) to a fraction of a second.
+ * Upper bound on a reply we will try to parse: about 2x what the 16k-token
+ * output cap can produce (~4-5 chars/token of JSON), so a real story is never
+ * refused. With a single parse, the worst case (deeply nested JSON just
+ * under the limit) stays around half a second.
  */
-export const MAX_REPLY_CHARS = 64_000;
+export const MAX_REPLY_CHARS = 128_000;
 
 /** The last parse, so the shape log after a failure doesn't parse again. */
 let lastParse = { raw: "", value: /** @type {unknown} */ (undefined) };
