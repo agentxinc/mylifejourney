@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import dynamic from "next/dynamic";
 import EventForm from "@/components/EventForm";
 import EventTimeline from "@/components/EventTimeline";
@@ -8,6 +8,91 @@ import StoryPreview from "@/components/StoryPreview";
 import { LifeEvent, GeneratedStory } from "@/types";
 import { getRandomQuote } from "@/lib/quotes";
 import { createSampleEvents } from "@/lib/sample-events";
+import {
+  CLIENT_TIMEOUT_MS,
+  DEFAULT_BUSY_WAIT_SEC,
+  FIELD_HINTS,
+  GENERATE_ERROR_COPY,
+  IMPROVE_ERROR_COPY,
+  SLOW_HINT_MS,
+  classifyFetchFailure,
+  isUsableStory,
+  parseErrorResponse,
+} from "@/lib/generate-errors.mjs";
+
+type ClientError = ReturnType<typeof parseErrorResponse>;
+type Flow = "generate" | "improve";
+type ShownError = ClientError & { flow: Flow; id: number; waitSec?: number; eventTitle?: string };
+
+/** Names the entry and field, since focus leaves the alert for the field. */
+function fieldHint(field: "title" | "date", eventTitle?: string): string {
+  const name = eventTitle?.trim();
+  if (field === "date" && name) return `Add a date for \u201c${name}\u201d.`;
+  if (field === "title") return "Add a title for the entry now open in the form.";
+  return FIELD_HINTS[field];
+}
+
+/** Test-only: forwards `?mock=` from the page URL; the server ignores it in Production. */
+function apiPath(path: string): string {
+  if (typeof window === "undefined") return path;
+  const mock = new URLSearchParams(window.location.search).get("mock");
+  return mock ? `${path}?mock=${encodeURIComponent(mock)}` : path;
+}
+
+function isOfflineMock(): boolean {
+  if (typeof window === "undefined") return false;
+  if (process.env.NEXT_PUBLIC_VERCEL_ENV === "production") return false;
+  return new URLSearchParams(window.location.search).get("mock") === "offline";
+}
+
+/**
+ * POST JSON with a page-side timeout. Resolves to the parsed story, or
+ * rejects with a ClientError. Never surfaces provider text.
+ */
+async function postForStory(path: string, payload: unknown): Promise<GeneratedStory> {
+  if (isOfflineMock()) throw classifyFetchFailure(new TypeError("Failed to fetch"), false, false);
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, CLIENT_TIMEOUT_MS);
+  try {
+    let res: Response;
+    try {
+      res = await fetch(apiPath(path), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      throw classifyFetchFailure(err, timedOut, navigator.onLine);
+    }
+    let text = "";
+    try {
+      text = await res.text();
+    } catch (err) {
+      throw classifyFetchFailure(err, timedOut, navigator.onLine);
+    }
+    if (!res.ok) throw parseErrorResponse(res.status, text, res.headers.get("Retry-After"));
+    let data: unknown;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw { code: "EMPTY" } as ClientError;
+    }
+    if (!isUsableStory(data)) throw { code: "EMPTY" } as ClientError;
+    return data as GeneratedStory;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function asClientError(err: unknown): ClientError {
+  const e = err as Partial<ClientError> | null;
+  return e && typeof e.code === "string" ? (e as ClientError) : { code: "SERVER" };
+}
 
 const STORAGE_KEY = "mylifejourney-events";
 
@@ -42,7 +127,15 @@ export default function Home() {
   const [story, setStory] = useState<GeneratedStory | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isImproving, setIsImproving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ShownError | null>(null);
+  const [busyWait, setBusyWait] = useState(0);
+  const [showSlowHint, setShowSlowHint] = useState(false);
+  const inFlight = useRef(false);
+  const busyStreak = useRef(0);
+  const errorSeq = useRef(0);
+  const generateBtnRef = useRef<HTMLButtonElement>(null);
+  const pendingFocus = useRef(false);
+  const wasWaiting = useRef(false);
   const [view, setView] = useState<"input" | "preview">("input");
   const [quote, setQuote] = useState<{ text: string; author: string } | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
@@ -92,63 +185,111 @@ export default function Home() {
     );
   }, []);
 
-  async function generateStory() {
-    if (events.length === 0) return;
-    setIsGenerating(true);
-    setError(null);
-    setStatusMessage("Creating your personalized storybook…");
+  // BUSY countdown: tick once a second; announce only the end.
+  useEffect(() => {
+    if (busyWait > 0) {
+      wasWaiting.current = true;
+      const t = setTimeout(() => setBusyWait((n) => Math.max(0, n - 1)), 1000);
+      return () => clearTimeout(t);
+    }
+    if (wasWaiting.current) {
+      wasWaiting.current = false;
+      setStatusMessage("You can try again now.");
+    }
+  }, [busyWait]);
 
-    try {
-      const res = await fetch("/api/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ events }),
-      });
+  // Move focus to "Try again" only once the button is actually enabled
+  // (after isGenerating clears, and after any BUSY countdown ends).
+  useEffect(() => {
+    if (!pendingFocus.current || isGenerating || busyWait > 0) return;
+    const btn = generateBtnRef.current;
+    if (btn && !btn.disabled) {
+      btn.focus();
+      pendingFocus.current = false;
+    }
+  }, [isGenerating, busyWait, error]);
 
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Failed to generate story");
-      }
-
-      const data: GeneratedStory = await res.json();
-      setStory(data);
-      setView("preview");
-      setStatusMessage("Your storybook is ready.");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
-      setStatusMessage("");
-    } finally {
-      setIsGenerating(false);
+  function showError(err: unknown, flow: Flow) {
+    const e = asClientError(err);
+    errorSeq.current += 1;
+    let waitSec: number | undefined;
+    if (e.code === "BUSY") {
+      busyStreak.current += 1;
+      // Second BUSY in a row: hold the button so nobody hammers a capped API.
+      if (busyStreak.current >= 2) waitSec = e.retryAfterSec ?? DEFAULT_BUSY_WAIT_SEC;
+    } else {
+      busyStreak.current = 0;
+    }
+    const target =
+      flow === "generate" && e.code === "BAD_INPUT" && e.eventId
+        ? events.find((ev) => ev.id === e.eventId)
+        : undefined;
+    // The alert announces the start of the wait once; ticks are visual only.
+    setError({ ...e, flow, id: errorSeq.current, waitSec, eventTitle: target?.title });
+    if (waitSec) setBusyWait(waitSec);
+    setStatusMessage("");
+    if (flow === "generate" && e.code === "BAD_INPUT" && e.field) {
+      if (target) setEditingEvent(target);
+      // Let EventForm render the event, then bring the field on screen and focus it.
+      setTimeout(() => {
+        const el = document.getElementById(`event-${e.field}`);
+        el?.scrollIntoView({ block: "center", behavior: "smooth" });
+        el?.focus({ preventScroll: true });
+      }, 0);
+    } else if (flow === "generate") {
+      pendingFocus.current = true;
     }
   }
 
-  async function improveStory(feedback: string) {
-    if (!story) return;
-    setIsImproving(true);
+  async function runRequest(flow: Flow, run: () => Promise<void>): Promise<boolean> {
+    // One request at a time: a ref updates synchronously, unlike `disabled`.
+    if (inFlight.current || busyWait > 0) return false;
+    inFlight.current = true;
+    pendingFocus.current = false;
     setError(null);
-    setStatusMessage("Updating your story with your feedback…");
-
+    setShowSlowHint(false);
+    const slowTimer = setTimeout(() => setShowSlowHint(true), SLOW_HINT_MS);
     try {
-      const res = await fetch("/api/improve", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ story, feedback }),
-      });
+      await run();
+      busyStreak.current = 0;
+      return true;
+    } catch (err) {
+      showError(err, flow);
+      return false;
+    } finally {
+      clearTimeout(slowTimer);
+      setShowSlowHint(false);
+      inFlight.current = false;
+    }
+  }
 
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Failed to improve story");
-      }
+  async function generateStory() {
+    // Check before touching state so a double-click can't reset the first request's UI.
+    if (events.length === 0 || inFlight.current || busyWait > 0) return;
+    setIsGenerating(true);
+    setStatusMessage("Creating your personalized storybook…");
+    await runRequest("generate", async () => {
+      const data = await postForStory("/api/generate", { events });
+      setStory(data);
+      setView("preview");
+      setStatusMessage("Your storybook is ready.");
+    });
+    setIsGenerating(false);
+  }
 
-      const data: GeneratedStory = await res.json();
+  /** Resolves true on success so StoryPreview keeps the typed feedback on failure. */
+  async function improveStory(feedback: string): Promise<boolean> {
+    if (!story || inFlight.current || busyWait > 0) return false;
+    setIsImproving(true);
+    setStatusMessage("Updating your story with your feedback…");
+    const ok = await runRequest("improve", async () => {
+      // On any failure `story` is left as-is, so the original is unchanged.
+      const data = await postForStory("/api/improve", { story, feedback });
       setStory(data);
       setStatusMessage("Story updated.");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
-      setStatusMessage("");
-    } finally {
-      setIsImproving(false);
-    }
+    });
+    setIsImproving(false);
+    return ok;
   }
 
   async function downloadPdf() {
@@ -222,15 +363,23 @@ export default function Home() {
 
         {error && (
           <div
+            key={error.id}
             role="alert"
-            className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 mb-6 flex items-start justify-between gap-3"
+            className="bg-amber-50 border border-amber-300 text-amber-900 rounded-xl p-4 mb-6 flex items-start justify-between gap-3"
           >
-            <p className="flex-1">{error}</p>
+            <span aria-hidden="true" className="leading-none">⚠️</span>
+            <p className="flex-1">
+              {(error.flow === "improve" ? IMPROVE_ERROR_COPY : GENERATE_ERROR_COPY)[error.code]}
+              {error.code === "BAD_INPUT" && error.field && (
+                <> {fieldHint(error.field, error.eventTitle)}</>
+              )}
+              {error.waitSec && busyWait > 0 ? <> You can try again in {error.waitSec} seconds.</> : null}
+            </p>
             <button
               type="button"
               onClick={() => setError(null)}
               aria-label="Dismiss error"
-              className="text-red-500 hover:text-red-700 font-bold leading-none px-1"
+              className="text-amber-700 hover:text-amber-900 font-bold leading-none px-1"
             >
               ×
             </button>
@@ -257,6 +406,7 @@ export default function Home() {
 
             <div className="text-center mt-8">
               <button
+                ref={generateBtnRef}
                 type="button"
                 onClick={generateStory}
                 className={`text-lg px-10 py-4 rounded-full font-semibold transition-all ${
@@ -264,12 +414,16 @@ export default function Home() {
                     ? "btn-primary"
                     : "bg-indigo-100 text-indigo-400 border-2 border-dashed border-indigo-300 cursor-not-allowed"
                 }`}
-                disabled={isGenerating || events.length === 0}
+                disabled={isGenerating || events.length === 0 || busyWait > 0}
                 aria-busy={isGenerating}
               >
                 {isGenerating
                   ? "Creating Your Storybook..."
-                  : "Generate My Life Storybook"}
+                  : busyWait > 0
+                    ? `Try again in ${busyWait}s`
+                    : error && error.flow === "generate"
+                      ? "Try again"
+                      : "Generate My Life Storybook"}
               </button>
               {events.length === 0 && (
                 <p className="text-sm text-gray-400 mt-3">
@@ -282,6 +436,9 @@ export default function Home() {
                   AI is crafting your personalized story...
                 </p>
               )}
+              <p className="text-sm text-gray-500 mt-2" aria-live="polite">
+                {isGenerating && showSlowHint ? "Still writing your story…" : ""}
+              </p>
             </div>
           </>
         ) : (

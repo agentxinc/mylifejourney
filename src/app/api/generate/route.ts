@@ -1,41 +1,59 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateStoryFromEvents } from "@/lib/gemini";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
+import {
+  SERVER_TIMEOUT_MS,
+  classifyError,
+  errorPayload,
+  getMock,
+  logSafe,
+  mockResponse,
+  validateEvents,
+  withTimeout,
+} from "@/lib/generate-errors.mjs";
 import { LifeEvent } from "@/types";
 
+// Keep above SERVER_TIMEOUT_MS (25s) so our JSON TIMEOUT always wins over a
+// platform 504 page.
+export const maxDuration = 60;
+
+function reply(p: ReturnType<typeof errorPayload>) {
+  return NextResponse.json(p.body, { status: p.status, headers: p.headers });
+}
+
 export async function POST(request: NextRequest) {
+  const mock = getMock(request.url, process.env.VERCEL_ENV);
+  if (mock) {
+    const body = await request.json().catch(() => null);
+    const firstEventId = typeof body?.events?.[0]?.id === "string" ? body.events[0].id : undefined;
+    return mockResponse(mock, { firstEventId });
+  }
+
   const ip = getClientIp(request);
   const rate = checkRateLimit(`generate:${ip}`);
   if (!rate.allowed) {
-    return NextResponse.json(
-      { error: "Too many requests. Please try again shortly." },
-      {
-        status: 429,
-        headers: { "Retry-After": String(rate.retryAfterSec) },
-      }
-    );
+    return reply(errorPayload("BUSY", { retryAfterSec: rate.retryAfterSec }));
   }
 
+  let events: LifeEvent[];
   try {
-    const { events }: { events: LifeEvent[] } = await request.json();
+    ({ events } = await request.json());
+  } catch {
+    return reply(errorPayload("BAD_INPUT"));
+  }
 
-    if (!events || events.length === 0) {
-      return NextResponse.json(
-        { error: "No events provided" },
-        { status: 400 }
-      );
-    }
+  const invalid = validateEvents(events);
+  if (invalid) return reply(errorPayload("BAD_INPUT", invalid));
 
-    const story = await generateStoryFromEvents(events);
-
+  try {
+    const story = await withTimeout((signal) => generateStoryFromEvents(events, signal), SERVER_TIMEOUT_MS);
     return NextResponse.json({
       ...story,
       generatedAt: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("Story generation error:", error);
-    const message =
-      error instanceof Error ? error.message : "Failed to generate story";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const code = classifyError(error);
+    logSafe("generate", code, error);
+    return reply(errorPayload(code));
   }
 }
