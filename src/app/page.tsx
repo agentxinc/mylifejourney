@@ -44,7 +44,7 @@ function fieldHint(field: "title" | "date", eventTitle: string | undefined, open
 }
 
 function prefersReducedMotion(): boolean {
-  return typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  return typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
 }
 
 /** Test-only: forwards `?mock=` from the page URL; the server ignores it in Production. */
@@ -384,7 +384,7 @@ export default function Home() {
           >
             <span aria-hidden="true" className="leading-none">⚠️</span>
             <p className="flex-1">
-              {error.code === "BUSY" && error.waitSec
+              {error.code === "BUSY" && error.waitSec && busyWait > 0
                 ? BUSY_WAIT_COPY
                 : (error.flow === "improve" ? IMPROVE_ERROR_COPY : GENERATE_ERROR_COPY)[error.code]}
               {error.code === "BAD_INPUT" && error.field && (

@@ -21,6 +21,11 @@ test("prose with braces before the JSON keeps title and subtitle", () => {
   assert.equal(parsed.subtitle, "S");
 });
 
+test("braces after the JSON, and many braces before it, keep the title", () => {
+  assert.equal(parseStoryText(JSON.stringify(story) + " Hope you {smile}!").title, "T");
+  assert.equal(parseStoryText("{x} ".repeat(30) + JSON.stringify(story) + " {y}").subtitle, "S");
+});
+
 test("nested under one key, chapters instead of pages, bare array", () => {
   assert.equal(parseStoryText(JSON.stringify({ story })).title, "T");
   assert.equal(parseStoryText(JSON.stringify({ title: "T", chapters: [page] })).pages.length, 1);
