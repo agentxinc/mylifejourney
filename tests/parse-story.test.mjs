@@ -88,3 +88,17 @@ test("replies over the size limit are refused before parsing, and the log skips 
   assert.ok(Date.now() - t < 200);
   assert.equal(parseStoryText(JSON.stringify(story)).title, "T");
 });
+
+test("worst case just under the limit: parse + shape log stay well under a second", () => {
+  const n = Math.floor((MAX_REPLY_CHARS - 1) / 6);
+  const nested = '{"a":'.repeat(n) + "}".repeat(n);
+  assert.ok(nested.length <= MAX_REPLY_CHARS);
+  const t = performance.now();
+  try {
+    parseStoryText(nested);
+  } catch {
+    // expected: not a story
+  }
+  describeResponse(nested);
+  assert.ok(performance.now() - t < 1000, `took ${performance.now() - t}ms`);
+});

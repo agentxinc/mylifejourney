@@ -29,14 +29,22 @@ export function parseStoryText(text) {
   // replies before any parsing so junk can't cost seconds of CPU.
   if (raw.length > MAX_REPLY_CHARS) throw new BadReplyError("reply too large");
   const value = parseLoose(raw);
+  lastParse = { raw, value };
   if (value === undefined) throw new BadReplyError("invalid JSON");
   const story = findStory(value);
   if (!story) throw new EmptyResultError("no pages");
   return story;
 }
 
-/** Upper bound on a reply we will try to parse (~3x the 16k-token output cap). */
-export const MAX_REPLY_CHARS = 200_000;
+/**
+ * Upper bound on a reply we will try to parse. The 16k-token output cap is
+ * roughly 64k characters, so a real reply can't be bigger; this keeps the
+ * worst case (deeply nested JSON just under the limit) to a fraction of a second.
+ */
+export const MAX_REPLY_CHARS = 64_000;
+
+/** The last parse, so the shape log after a failure doesn't parse again. */
+let lastParse = { raw: "", value: /** @type {unknown} */ (undefined) };
 
 const MAX_STARTS = 20;
 const MAX_ENDS = 20;
@@ -154,7 +162,8 @@ function numbered(pages) {
  */
 export function describeResponse(text, meta = {}) {
   const raw = (text ?? "").trim();
-  const v = raw && raw.length <= MAX_REPLY_CHARS ? parseLoose(raw) : undefined;
+  const v =
+    !raw || raw.length > MAX_REPLY_CHARS ? undefined : raw === lastParse.raw ? lastParse.value : parseLoose(raw);
   const isObj = !!v && typeof v === "object" && !Array.isArray(v);
   const first = raw.slice(0, 1);
   return {
