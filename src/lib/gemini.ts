@@ -1,26 +1,51 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { LifeEvent, StoryPage } from "@/types";
-import { EmptyResultError } from "@/lib/generate-errors.mjs";
-import { describeResponse, parseStoryText } from "@/lib/parse-story.mjs";
+import { BadReplyError, describeResponse, parseStoryText } from "@/lib/parse-story.mjs";
 
-/** Parse Gemini's reply; on failure log the response shape (never its text) and rethrow. */
+/**
+ * Story replies are long JSON. Leave plenty of output room and keep thinking
+ * low so reasoning tokens can't crowd out the story (finishReason MAX_TOKENS).
+ */
+const STORY_CONFIG = {
+  responseMimeType: "application/json",
+  maxOutputTokens: 16384,
+  thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+};
+
+type GeminiReply = {
+  text?: string;
+  candidates?: { finishReason?: unknown }[];
+  promptFeedback?: { blockReason?: unknown };
+};
+
+/**
+ * Parse Gemini's reply. A blocked prompt or a finishReason other than STOP
+ * (MAX_TOKENS, SAFETY, ...) is a bad reply -> SERVER. On any failure, log the
+ * reply's shape (never its text) and rethrow.
+ */
 function parseStoryJson(
   route: string,
-  response: { text?: string; candidates?: { finishReason?: unknown }[] }
+  response: GeminiReply
 ): { title?: string; subtitle?: string; pages: StoryPage[] } {
-  const text = response.text ?? "";
+  let text = "";
+  const finishReason = response.candidates?.[0]?.finishReason;
+  const blockReason = response.promptFeedback?.blockReason;
   try {
+    text = response.text ?? "";
+    if (blockReason) throw new BadReplyError(`blocked ${String(blockReason)}`);
+    if (finishReason !== undefined && finishReason !== "STOP") {
+      throw new BadReplyError(`finishReason ${String(finishReason)}`);
+    }
     return parseStoryText(text) as { title?: string; subtitle?: string; pages: StoryPage[] };
   } catch (err) {
-    if (err instanceof EmptyResultError) {
-      console.error(
-        JSON.stringify({
-          route,
-          parse: err.message,
-          ...describeResponse(text, response.candidates?.[0]?.finishReason),
-        })
-      );
-    }
+    const e = err as { name?: unknown; message?: unknown };
+    console.error(
+      JSON.stringify({
+        route,
+        parse: e instanceof BadReplyError || e?.name === "EmptyResultError" ? e.message : e?.name ?? "unknown",
+        ...describeResponse(text, { finishReason, blockReason }),
+      })
+    );
     throw err;
   }
 }
@@ -81,7 +106,7 @@ Make the narratives personal, warm, and vivid. Each narrative should be 2-3 para
     model: getModel(),
     contents: prompt,
     config: {
-      responseMimeType: "application/json",
+      ...STORY_CONFIG,
       // Cancels the HTTP call at our cutoff. Per the SDK, the provider may
       // still bill work already started; this stops us waiting on it.
       abortSignal,
@@ -143,7 +168,7 @@ Respond in JSON format with this exact structure:
     model: getModel(),
     contents: prompt,
     config: {
-      responseMimeType: "application/json",
+      ...STORY_CONFIG,
       // Cancels the HTTP call at our cutoff. Per the SDK, the provider may
       // still bill work already started; this stops us waiting on it.
       abortSignal,

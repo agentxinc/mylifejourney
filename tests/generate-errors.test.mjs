@@ -62,9 +62,9 @@ test("BAD_INPUT: names the first missing field and event", async () => {
   assert.deepEqual(parsed, { code: "BAD_INPUT", field: "date", eventId: "b" });
 });
 
-test("EMPTY: empty / invalid JSON / no pages map to EMPTY", async () => {
+test("EMPTY: only a readable reply with no pages; bad JSON is SERVER", async () => {
   assert.equal(classifyError(new EmptyResultError("no pages")), "EMPTY");
-  assert.equal(classifyError(new SyntaxError("bad json")), "EMPTY");
+  assert.equal(classifyError(new SyntaxError("bad json")), "SERVER");
   assert.equal((await roundTrip(await mockResponse("empty"))).code, "EMPTY");
   assert.equal(isUsableStory({ pages: [] }), false);
   assert.equal(isUsableStory({}), false);
