@@ -21,7 +21,11 @@ function reply(p: ReturnType<typeof errorPayload>) {
 
 export async function POST(request: NextRequest) {
   const mock = getMock(request.url, process.env.VERCEL_ENV);
-  if (mock) return mockResponse(mock);
+  if (mock) {
+    const body = await request.json().catch(() => null);
+    const firstEventId = typeof body?.events?.[0]?.id === "string" ? body.events[0].id : undefined;
+    return mockResponse(mock, { firstEventId });
+  }
 
   const ip = getClientIp(request);
   const rate = checkRateLimit(`improve:${ip}`);
@@ -42,7 +46,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const improved = await withTimeout(improveStory(story, feedback), SERVER_TIMEOUT_MS);
+    const improved = await withTimeout((signal) => improveStory(story, feedback, signal), SERVER_TIMEOUT_MS);
     return NextResponse.json({
       ...improved,
       generatedAt: new Date().toISOString(),

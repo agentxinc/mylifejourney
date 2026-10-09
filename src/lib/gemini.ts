@@ -33,7 +33,8 @@ function getClient() {
 }
 
 export async function generateStoryFromEvents(
-  events: LifeEvent[]
+  events: LifeEvent[],
+  abortSignal?: AbortSignal
 ): Promise<{ title: string; subtitle: string; pages: StoryPage[] }> {
   const ai = getClient();
 
@@ -73,6 +74,9 @@ Make the narratives personal, warm, and vivid. Each narrative should be 2-3 para
     contents: prompt,
     config: {
       responseMimeType: "application/json",
+      // Cancels the HTTP call at our cutoff. Per the SDK, the provider may
+      // still bill work already started; this stops us waiting on it.
+      abortSignal,
     },
   });
 
@@ -96,7 +100,8 @@ Make the narratives personal, warm, and vivid. Each narrative should be 2-3 para
 
 export async function improveStory(
   currentStory: { title: string; subtitle: string; pages: StoryPage[] },
-  feedback: string
+  feedback: string,
+  abortSignal?: AbortSignal
 ): Promise<{ title: string; subtitle: string; pages: StoryPage[] }> {
   const ai = getClient();
 
@@ -131,6 +136,9 @@ Respond in JSON format with this exact structure:
     contents: prompt,
     config: {
       responseMimeType: "application/json",
+      // Cancels the HTTP call at our cutoff. Per the SDK, the provider may
+      // still bill work already started; this stops us waiting on it.
+      abortSignal,
     },
   });
 

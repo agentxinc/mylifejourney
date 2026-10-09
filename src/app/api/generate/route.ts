@@ -23,7 +23,11 @@ function reply(p: ReturnType<typeof errorPayload>) {
 
 export async function POST(request: NextRequest) {
   const mock = getMock(request.url, process.env.VERCEL_ENV);
-  if (mock) return mockResponse(mock);
+  if (mock) {
+    const body = await request.json().catch(() => null);
+    const firstEventId = typeof body?.events?.[0]?.id === "string" ? body.events[0].id : undefined;
+    return mockResponse(mock, { firstEventId });
+  }
 
   const ip = getClientIp(request);
   const rate = checkRateLimit(`generate:${ip}`);
@@ -42,7 +46,7 @@ export async function POST(request: NextRequest) {
   if (invalid) return reply(errorPayload("BAD_INPUT", invalid));
 
   try {
-    const story = await withTimeout(generateStoryFromEvents(events), SERVER_TIMEOUT_MS);
+    const story = await withTimeout((signal) => generateStoryFromEvents(events, signal), SERVER_TIMEOUT_MS);
     return NextResponse.json({
       ...story,
       generatedAt: new Date().toISOString(),

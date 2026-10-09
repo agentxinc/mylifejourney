@@ -6,7 +6,7 @@ import { formatCalendarDate } from "@/lib/dates";
 
 interface StoryPreviewProps {
   story: GeneratedStory;
-  onImprove: (feedback: string) => void;
+  onImprove: (feedback: string) => Promise<boolean> | void;
   onDownloadPdf: () => void;
   isImproving: boolean;
 }
@@ -20,10 +20,12 @@ export default function StoryPreview({
   const [feedback, setFeedback] = useState("");
   const [showFeedback, setShowFeedback] = useState(false);
 
-  function handleSubmitFeedback(e: React.FormEvent) {
+  async function handleSubmitFeedback(e: React.FormEvent) {
     e.preventDefault();
     if (!feedback.trim()) return;
-    onImprove(feedback);
+    // Keep the typed feedback until the update succeeds, so a failure doesn't lose it.
+    const ok = await onImprove(feedback);
+    if (ok === false) return;
     setFeedback("");
     setShowFeedback(false);
   }
