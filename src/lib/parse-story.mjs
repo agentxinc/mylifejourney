@@ -32,11 +32,39 @@ export function parseStoryText(text) {
   return story;
 }
 
-const MAX_TRIES = 20;
+const MAX_STARTS = 20;
+const MAX_ENDS = 20;
 
 /**
- * Whole text, then a fenced block, then objects starting at each "{" (so prose
- * like "{smile}" before the JSON doesn't hide it), then arrays.
+ * Start positions for `open`, most JSON-like first: `{"` / `[{` style starts
+ * before bare braces, so prose like "{smile}" doesn't use up the tries.
+ * @param {string} s @param {string} open
+ */
+function starts(s, open) {
+  const strong = [];
+  const weak = [];
+  for (let i = s.indexOf(open); i >= 0 && strong.length < MAX_STARTS; i = s.indexOf(open, i + 1)) {
+    const next = s.slice(i + 1, i + 40).trimStart()[0];
+    if (open === "{" ? next === '"' : next === "{" || next === "[") strong.push(i);
+    else if (weak.length < MAX_STARTS) weak.push(i);
+  }
+  return [...strong, ...weak].slice(0, MAX_STARTS);
+}
+
+/**
+ * End positions for `close`, last first, so "{smile}" after the JSON can't
+ * pin the end past the real object.
+ * @param {string} s @param {string} close
+ */
+function ends(s, close) {
+  const out = [];
+  for (let i = s.lastIndexOf(close); i >= 0 && out.length < MAX_ENDS; i = s.lastIndexOf(close, i - 1)) out.push(i);
+  return out;
+}
+
+/**
+ * Whole text, then a fenced block, then objects (then arrays) between likely
+ * start and end positions. Bounded to MAX_STARTS x MAX_ENDS parses per kind.
  * @param {string} raw
  */
 function parseLoose(raw) {
@@ -55,12 +83,13 @@ function parseLoose(raw) {
     if (r.ok) return r.value;
   }
   for (const [open, close] of [["{", "}"], ["[", "]"]]) {
-    const end = raw.lastIndexOf(close);
-    let start = raw.indexOf(open);
-    for (let n = 0; start >= 0 && start < end && n < MAX_TRIES; n++) {
-      r = tryParse(raw.slice(start, end + 1));
-      if (r.ok) return r.value;
-      start = raw.indexOf(open, start + 1);
+    const endList = ends(raw, close);
+    for (const start of starts(raw, open)) {
+      for (const end of endList) {
+        if (end <= start) break;
+        r = tryParse(raw.slice(start, end + 1));
+        if (r.ok) return r.value;
+      }
     }
   }
   return undefined;

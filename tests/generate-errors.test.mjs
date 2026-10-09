@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  BUSY_WAIT_COPY,
   CLIENT_TIMEOUT_MS,
   SERVER_TIMEOUT_MS,
   EmptyResultError,
@@ -100,9 +101,29 @@ test("slow mock waits 35s (past the 30s page cutoff) before answering", async ()
   assert.equal(res.status, 504);
 });
 
-test("mock bad points at the first real event when one is sent", async () => {
-  const parsed = await roundTrip(await mockResponse("bad", { firstEventId: "ev-1" }));
-  assert.deepEqual(parsed, { code: "BAD_INPUT", field: "date", eventId: "ev-1" });
+test("mock bad flags the entry that is really missing a field, else the first title", async () => {
+  const events = [
+    { id: "ev-1", title: "A", date: "2018-08-15" },
+    { id: "ev-2", title: "B", date: "" },
+  ];
+  assert.deepEqual(await roundTrip(await mockResponse("bad", { events })), {
+    code: "BAD_INPUT",
+    field: "date",
+    eventId: "ev-2",
+  });
+  assert.deepEqual(await roundTrip(await mockResponse("bad", { events: [events[0]] })), {
+    code: "BAD_INPUT",
+    field: "title",
+    eventId: "ev-1",
+  });
+  assert.deepEqual(await roundTrip(await mockResponse("bad")), { code: "BAD_INPUT", field: "title" });
+});
+
+test("countdown copy is UI's exact line", () => {
+  assert.equal(
+    BUSY_WAIT_COPY,
+    "We're at capacity right now \u2014 you can try again in a moment. Your entries are still here."
+  );
 });
 
 test("mock switch: honored locally/Preview, ignored in Production", () => {

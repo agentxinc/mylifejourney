@@ -42,6 +42,10 @@ export const IMPROVE_ERROR_COPY = {
   EMPTY: "We couldn't improve this one — your original is unchanged.",
 };
 
+/** BUSY copy while the button is counting down (replaces the BUSY line). */
+export const BUSY_WAIT_COPY =
+  "We're at capacity right now \u2014 you can try again in a moment. Your entries are still here.";
+
 /** @type {Record<BadField, string>} */
 export const FIELD_HINTS = {
   title: "Add a title for this moment.",
@@ -208,9 +212,10 @@ export function getMock(url, vercelEnv) {
 
 /**
  * Build the mock response. "slow" waits 35s first (past the page's 30s cutoff).
- * `firstEventId` lets `bad` point at a real event on the page.
+ * `events` lets `bad` point at a real event on the page: the first one that is
+ * really missing a title/date, else the first event's title.
  * @param {MockValue} mock
- * @param {{ sleep?: (ms: number) => Promise<void>, firstEventId?: string }} [opts]
+ * @param {{ sleep?: (ms: number) => Promise<void>, events?: unknown }} [opts]
  * @returns {Promise<Response>}
  */
 export async function mockResponse(mock, opts = {}) {
@@ -224,7 +229,12 @@ export async function mockResponse(mock, opts = {}) {
   switch (mock) {
     case "busy": return json(errorPayload("BUSY", { retryAfterSec: 30 }));
     case "timeout": return json(errorPayload("TIMEOUT"));
-    case "bad": return json(errorPayload("BAD_INPUT", { field: "events[0].date", eventId: opts.firstEventId }));
+    case "bad": {
+      const list = Array.isArray(opts.events) ? opts.events : [];
+      const real = list.length ? validateEvents(list) : null;
+      const firstId = typeof list[0]?.id === "string" ? list[0].id : undefined;
+      return json(errorPayload("BAD_INPUT", real ?? { field: "events[0].title", eventId: firstId }));
+    }
     case "empty": return json(errorPayload("EMPTY"));
     case "500": return json(errorPayload("SERVER"));
     case "html504":
