@@ -144,3 +144,36 @@ test("copy: every state says entries are still here (except BAD_INPUT); Regenera
   assert.doesNotMatch(Object.values(GENERATE_ERROR_COPY).join(" "), /saved/i);
   assert.equal(IMPROVE_ERROR_COPY.EMPTY, "We couldn't improve this one — your original is unchanged.");
 });
+
+import { retryOnOverload, isOverloaded } from "../src/lib/generate-errors.mjs";
+
+const e503 = Object.assign(new Error("UNAVAILABLE: The model is overloaded"), { status: 503 });
+const e429 = Object.assign(new Error("RESOURCE_EXHAUSTED: quota"), { status: 429 });
+
+test("503 retries once and can succeed; 429 and others never retry", async () => {
+  let calls = 0;
+  const ok = await retryOnOverload(async () => (++calls === 1 ? Promise.reject(e503) : "story"), undefined, { baseMs: 1, random: () => 0 });
+  assert.equal(ok, "story");
+  assert.equal(calls, 2);
+  for (const err of [e429, new Error("boom")]) {
+    calls = 0;
+    await assert.rejects(retryOnOverload(async () => { calls++; throw err; }, undefined, { baseMs: 1 }), err);
+    assert.equal(calls, 1);
+  }
+  calls = 0;
+  await assert.rejects(retryOnOverload(async () => { calls++; throw e503; }, undefined, { baseMs: 1, random: () => 0 }), e503);
+  assert.equal(calls, 2, "at most one retry");
+  assert.equal(isOverloaded(e429), false);
+  assert.equal(isOverloaded(Object.assign(new Error("UNAVAILABLE but RESOURCE_EXHAUSTED"), { status: 503 })), false);
+});
+
+test("retry wait respects the timeout's abort signal", async () => {
+  const ac = new AbortController();
+  let calls = 0;
+  const t = Date.now();
+  const p = retryOnOverload(async () => { calls++; throw e503; }, ac.signal, { baseMs: 5_000 });
+  setTimeout(() => ac.abort(), 20);
+  await assert.rejects(p, e503);
+  assert.equal(calls, 1);
+  assert.ok(Date.now() - t < 1_000);
+});

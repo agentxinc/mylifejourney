@@ -116,6 +116,47 @@ export function withTimeout(task, ms) {
   ]).finally(() => clearTimeout(timer));
 }
 
+/** True only for Gemini "model overloaded" (503 / UNAVAILABLE), never for quota (429). */
+/** @param {unknown} err */
+export function isOverloaded(err) {
+  const e = /** @type {{ status?: unknown, code?: unknown, message?: unknown } | null} */ (err);
+  const status = Number(e?.status ?? e?.code);
+  const message = typeof e?.message === "string" ? e.message : "";
+  if (status === 429 || /RESOURCE_EXHAUSTED|quota|rate limit|\b429\b/i.test(message)) return false;
+  return status === 503 || /UNAVAILABLE|overloaded|\b503\b/i.test(message);
+}
+
+/** Log line for a 503 retry (no user data). @param {string} route */
+export const retryLog = (route) => () => console.warn(JSON.stringify({ route, retry: "gemini-503" }));
+
+/** Base wait before the single 503 retry; jitter adds 0-500ms. */
+export const RETRY_BASE_MS = 1_500;
+
+/**
+ * Run `task` once more if Gemini says it's overloaded (503). Never retries a
+ * 429 or anything else, retries at most once, and gives up the moment `signal`
+ * aborts, so the whole call stays inside withTimeout's budget.
+ * @template T
+ * @param {(signal: AbortSignal | undefined) => Promise<T>} task
+ * @param {AbortSignal} [signal]
+ * @param {{ baseMs?: number, random?: () => number, onRetry?: (err: unknown) => void }} [opts]
+ * @returns {Promise<T>}
+ */
+export async function retryOnOverload(task, signal, opts = {}) {
+  try {
+    return await task(signal);
+  } catch (err) {
+    if (!isOverloaded(err) || signal?.aborted) throw err;
+    const wait = (opts.baseMs ?? RETRY_BASE_MS) + Math.floor((opts.random ?? Math.random)() * 500);
+    await new Promise((resolve, reject) => {
+      const t = setTimeout(resolve, wait);
+      signal?.addEventListener("abort", () => (clearTimeout(t), reject(err)), { once: true });
+    });
+    opts.onRetry?.(err);
+    return task(signal);
+  }
+}
+
 /**
  * Map a thrown error (Gemini SDK, our own, anything) to a code.
  * @param {unknown} err
