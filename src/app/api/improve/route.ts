@@ -9,6 +9,8 @@ import {
   logSafe,
   mockResponse,
   withTimeout,
+  retryOnOverload,
+  retryLog,
 } from "@/lib/generate-errors.mjs";
 import { StoryPage } from "@/types";
 
@@ -45,7 +47,10 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const improved = await withTimeout((signal) => improveStory(story, feedback, signal), SERVER_TIMEOUT_MS);
+    const improved = await withTimeout(
+      (signal) => retryOnOverload((s) => improveStory(story, feedback, s), signal, { onRetry: retryLog("improve") }),
+      SERVER_TIMEOUT_MS
+    );
     return NextResponse.json({
       ...improved,
       generatedAt: new Date().toISOString(),

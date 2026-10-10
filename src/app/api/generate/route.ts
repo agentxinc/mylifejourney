@@ -10,6 +10,8 @@ import {
   mockResponse,
   validateEvents,
   withTimeout,
+  retryOnOverload,
+  retryLog,
 } from "@/lib/generate-errors.mjs";
 import { LifeEvent } from "@/types";
 
@@ -45,7 +47,10 @@ export async function POST(request: NextRequest) {
   if (invalid) return reply(errorPayload("BAD_INPUT", invalid));
 
   try {
-    const story = await withTimeout((signal) => generateStoryFromEvents(events, signal), SERVER_TIMEOUT_MS);
+    const story = await withTimeout(
+      (signal) => retryOnOverload((s) => generateStoryFromEvents(events, s), signal, { onRetry: retryLog("generate") }),
+      SERVER_TIMEOUT_MS
+    );
     return NextResponse.json({
       ...story,
       generatedAt: new Date().toISOString(),
