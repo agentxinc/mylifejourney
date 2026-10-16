@@ -18,7 +18,10 @@
 /** @typedef {{ status: number, body: ApiErrorBody, headers: Record<string, string> }} ErrorPayload */
 
 /** Server stops waiting for Gemini after this long and returns TIMEOUT. */
-export const SERVER_TIMEOUT_MS = 25_000;
+export const SERVER_TIMEOUT_MS = 14_500;
+/** Per-attempt cutoffs: primary model, then one lighter fallback model. */
+export const PRIMARY_TIMEOUT_MS = 10_000;
+export const FALLBACK_TIMEOUT_MS = 4_000;
 /** Page gives up after this long (covers platform errors that never return). */
 export const CLIENT_TIMEOUT_MS = 30_000;
 /** Show "Still writing your story…" after this long. */
@@ -108,8 +111,10 @@ export function withTimeout(task, ms) {
     /** @type {Promise<T>} */ (
       new Promise((_, reject) => {
         timer = setTimeout(() => {
-          controller.abort();
+          // Reject first so the race settles with TimeoutError, not the
+          // task's own AbortError fired synchronously by abort().
           reject(new TimeoutError());
+          controller.abort();
         }, ms);
       })
     ),
@@ -123,37 +128,67 @@ export function isOverloaded(err) {
   const status = Number(e?.status ?? e?.code);
   const message = typeof e?.message === "string" ? e.message : "";
   if (status === 429 || /RESOURCE_EXHAUSTED|quota|rate limit|\b429\b/i.test(message)) return false;
-  return status === 503 || /UNAVAILABLE|overloaded|\b503\b/i.test(message);
+  // A numeric status is authoritative: only 503 is "overloaded".
+  if (Number.isFinite(status) && status > 0) return status === 503;
+  return /UNAVAILABLE|overloaded|\b503\b/i.test(message);
 }
 
 /** Log line for a 503 retry (no user data). @param {string} route */
-export const retryLog = (route) => () => console.warn(JSON.stringify({ route, retry: "gemini-503" }));
+export const retryLog = (route) => () => console.warn(JSON.stringify({ route, retry: "gemini-fallback" }));
 
-/** Base wait before the single 503 retry; jitter adds 0-500ms. */
-export const RETRY_BASE_MS = 1_500;
+/** Base wait before the fallback attempt; jitter adds 0-200ms. */
+export const RETRY_BASE_MS = 200;
 
 /**
- * Run `task` once more if Gemini says it's overloaded (503). Never retries a
- * 429 or anything else, retries at most once, and gives up the moment `signal`
- * aborts, so the whole call stays inside withTimeout's budget.
+ * Wait `ms`, rejecting with `err` if `signal` aborts. The abort listener is
+ * removed when the wait ends normally (no leak).
+ * @param {number} ms @param {AbortSignal | undefined} signal @param {unknown} err
+ */
+export function abortableWait(ms, signal, err) {
+  return new Promise((resolve, reject) => {
+    const onAbort = () => { clearTimeout(t); reject(err); };
+    const t = setTimeout(() => { signal?.removeEventListener("abort", onAbort); resolve(undefined); }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/** @param {AbortSignal | undefined} outer @param {AbortSignal} inner */
+function linkSignals(outer, inner) {
+  return outer ? AbortSignal.any([outer, inner]) : inner;
+}
+
+/** @returns {Error & { status: number }} */
+function overloadedError() {
+  return Object.assign(new Error("UNAVAILABLE: primary and fallback models overloaded"), { status: 503 });
+}
+
+/**
+ * Try the primary model with its own cutoff; on an overload (503) or a
+ * primary timeout, try the fallback model once with a shorter cutoff. Never
+ * retries a 429 or anything else. If the fallback is also overloaded or times
+ * out, throws a 503-shaped error so the route answers BUSY quickly.
  * @template T
- * @param {(signal: AbortSignal | undefined) => Promise<T>} task
- * @param {AbortSignal} [signal]
- * @param {{ baseMs?: number, random?: () => number, onRetry?: (err: unknown) => void }} [opts]
+ * @param {(which: "primary" | "fallback", signal: AbortSignal) => Promise<T>} task
+ * @param {AbortSignal} [signal]  outer hard-cap signal (from withTimeout)
+ * @param {{ primaryMs?: number, fallbackMs?: number, baseMs?: number, random?: () => number, onRetry?: (err: unknown) => void }} [opts]
  * @returns {Promise<T>}
  */
-export async function retryOnOverload(task, signal, opts = {}) {
+export async function withModelFallback(task, signal, opts = {}) {
+  const primaryMs = opts.primaryMs ?? PRIMARY_TIMEOUT_MS;
+  const fallbackMs = opts.fallbackMs ?? FALLBACK_TIMEOUT_MS;
   try {
-    return await task(signal);
+    return await withTimeout((s) => task("primary", linkSignals(signal, s)), primaryMs);
   } catch (err) {
-    if (!isOverloaded(err) || signal?.aborted) throw err;
-    const wait = (opts.baseMs ?? RETRY_BASE_MS) + Math.floor((opts.random ?? Math.random)() * 500);
-    await new Promise((resolve, reject) => {
-      const t = setTimeout(resolve, wait);
-      signal?.addEventListener("abort", () => (clearTimeout(t), reject(err)), { once: true });
-    });
+    if (!(isOverloaded(err) || err instanceof TimeoutError) || signal?.aborted) throw err;
+    const wait = (opts.baseMs ?? RETRY_BASE_MS) + Math.floor((opts.random ?? Math.random)() * 200);
+    await abortableWait(wait, signal, err);
     opts.onRetry?.(err);
-    return task(signal);
+    try {
+      return await withTimeout((s) => task("fallback", linkSignals(signal, s)), fallbackMs);
+    } catch (err2) {
+      if (isOverloaded(err2) || err2 instanceof TimeoutError) throw overloadedError();
+      throw err2;
+    }
   }
 }
 
@@ -175,17 +210,29 @@ export function classifyError(err) {
   return "SERVER";
 }
 
+/** Max chars of provider message we ever log. */
+export const LOG_MESSAGE_MAX = 300;
+
 /**
- * Log code + provider status/code only; never the user's text or the raw message.
+ * Log code + provider status/code. The provider message (truncated) is logged
+ * only for 503/429/UNAVAILABLE/RESOURCE_EXHAUSTED, never for INVALID_ARGUMENT
+ * or anything else, and never if it contains any of `userTexts`.
  * @param {string} route
  * @param {ErrorCode} code
  * @param {unknown} err
+ * @param {{ userTexts?: string[] }} [opts]
  */
-export function logSafe(route, code, err) {
+export function logSafe(route, code, err, opts = {}) {
   const e = /** @type {{ status?: unknown, code?: unknown, name?: unknown, message?: unknown } | null} */ (err);
   const message = typeof e?.message === "string" ? e.message : "";
   const providerCode =
     message.match(/\b(RESOURCE_EXHAUSTED|UNAVAILABLE|DEADLINE_EXCEEDED|INVALID_ARGUMENT|PERMISSION_DENIED|NOT_FOUND|INTERNAL)\b/)?.[1] ?? null;
+  const status = Number(e?.status ?? e?.code);
+  const capacity =
+    providerCode !== "INVALID_ARGUMENT" &&
+    (status === 503 || status === 429 || providerCode === "UNAVAILABLE" || providerCode === "RESOURCE_EXHAUSTED");
+  const texts = (opts.userTexts ?? []).filter((t) => typeof t === "string" && t.trim().length >= 3);
+  const leaks = texts.some((t) => message.toLowerCase().includes(t.trim().toLowerCase()));
   console.error(
     JSON.stringify({
       route,
@@ -193,6 +240,7 @@ export function logSafe(route, code, err) {
       providerStatus: e?.status ?? e?.code ?? null,
       providerCode,
       errorName: e?.name ?? null,
+      ...(capacity && !leaks && message ? { providerMessage: message.slice(0, LOG_MESSAGE_MAX) } : {}),
     })
   );
 }
@@ -355,3 +403,5 @@ export function isUsableStory(data) {
   const d = /** @type {{ pages?: unknown } | null} */ (data);
   return !!d && Array.isArray(d.pages) && d.pages.length > 0;
 }
+
+

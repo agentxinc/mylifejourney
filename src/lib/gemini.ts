@@ -51,9 +51,16 @@ function parseStoryJson(
 }
 
 /** Gemini 2.5* is limited to prior users; new API keys get 404 NOT_FOUND. */
-const DEFAULT_MODEL = "gemini-3.5-flash";
+const DEFAULT_MODEL = "gemini-3.8-flash";
+/** Used once when the primary is overloaded (503) or slow. */
+const DEFAULT_FALLBACK_MODEL = "gemini-3.5-flash-lite";
 
-function getModel(): string {
+export type ModelChoice = "primary" | "fallback";
+
+function getModel(which: ModelChoice = "primary"): string {
+  if (which === "fallback") {
+    return process.env.GEMINI_FALLBACK_MODEL?.trim() || DEFAULT_FALLBACK_MODEL;
+  }
   return process.env.GEMINI_MODEL?.trim() || DEFAULT_MODEL;
 }
 
@@ -67,7 +74,8 @@ function getClient() {
 
 export async function generateStoryFromEvents(
   events: LifeEvent[],
-  abortSignal?: AbortSignal
+  abortSignal?: AbortSignal,
+  which: ModelChoice = "primary"
 ): Promise<{ title: string; subtitle: string; pages: StoryPage[] }> {
   const ai = getClient();
 
@@ -103,7 +111,7 @@ Respond in JSON format with this exact structure:
 Make the narratives personal, warm, and vivid. Each narrative should be 2-3 paragraphs that paint a picture of the moment. Use sensory details and emotions.`;
 
   const response = await ai.models.generateContent({
-    model: getModel(),
+    model: getModel(which),
     contents: prompt,
     config: {
       ...STORY_CONFIG,
@@ -134,7 +142,8 @@ Make the narratives personal, warm, and vivid. Each narrative should be 2-3 para
 export async function improveStory(
   currentStory: { title: string; subtitle: string; pages: StoryPage[] },
   feedback: string,
-  abortSignal?: AbortSignal
+  abortSignal?: AbortSignal,
+  which: ModelChoice = "primary"
 ): Promise<{ title: string; subtitle: string; pages: StoryPage[] }> {
   const ai = getClient();
 
@@ -165,7 +174,7 @@ Respond in JSON format with this exact structure:
 }`;
 
   const response = await ai.models.generateContent({
-    model: getModel(),
+    model: getModel(which),
     contents: prompt,
     config: {
       ...STORY_CONFIG,

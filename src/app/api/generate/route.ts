@@ -10,12 +10,12 @@ import {
   mockResponse,
   validateEvents,
   withTimeout,
-  retryOnOverload,
+  withModelFallback,
   retryLog,
 } from "@/lib/generate-errors.mjs";
 import { LifeEvent } from "@/types";
 
-// Keep above SERVER_TIMEOUT_MS (25s) so our JSON TIMEOUT always wins over a
+// Keep above SERVER_TIMEOUT_MS (14.5s) so our JSON TIMEOUT always wins over a
 // platform 504 page.
 export const maxDuration = 60;
 
@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const story = await withTimeout(
-      (signal) => retryOnOverload((s) => generateStoryFromEvents(events, s), signal, { onRetry: retryLog("generate") }),
+      (signal) => withModelFallback((which, sig) => generateStoryFromEvents(events, sig, which), signal, { onRetry: retryLog("generate") }),
       SERVER_TIMEOUT_MS
     );
     return NextResponse.json({
@@ -57,7 +57,7 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     const code = classifyError(error);
-    logSafe("generate", code, error);
+    logSafe("generate", code, error, { userTexts: events.map((e) => e.title) });
     return reply(errorPayload(code));
   }
 }
