@@ -143,7 +143,7 @@ export function providerInfo(err) {
   const e = /** @type {{ status?: unknown, code?: unknown, message?: unknown }} */ (err);
   const message = typeof e?.message === "string" ? e.message : "";
   const code =
-    message.match(/\b(RESOURCE_EXHAUSTED|UNAVAILABLE|DEADLINE_EXCEEDED|INVALID_ARGUMENT|PERMISSION_DENIED|NOT_FOUND|INTERNAL)\b/)?.[1] ??
+    message.match(/\b(GROQ_AUTH|RESOURCE_EXHAUSTED|UNAVAILABLE|DEADLINE_EXCEEDED|INVALID_ARGUMENT|PERMISSION_DENIED|NOT_FOUND|INTERNAL)\b/)?.[1] ??
     (err instanceof TimeoutError ? "TIMEOUT" : null);
   return { status: e?.status ?? e?.code ?? null, code };
 }
@@ -211,6 +211,17 @@ export const DEFAULT_PROVIDER_ORDER = "gemini-primary,gemini-lite";
 /** Order used when MLJ_FALLBACK_PROVIDER=groq and MLJ_PROVIDER_ORDER is unset. */
 export const GROQ_FALLBACK_ORDER = "gemini-primary,gemini-lite,groq";
 
+/** Config warnings already logged (once per process per kind). */
+const warned = new Set();
+/** @param {string} kind @param {Record<string, unknown>} line */
+function warnOnce(kind, line) {
+  if (warned.has(kind)) return;
+  warned.add(kind);
+  console.warn(JSON.stringify(line));
+}
+/** Test hook: forget which config warnings were logged. */
+export function resetConfigWarnings() { warned.clear(); }
+
 /** @param {unknown} v @param {number} dflt */
 function envMs(v, dflt) {
   const n = Number(typeof v === "string" ? v.trim() : v);
@@ -229,12 +240,33 @@ export function chainConfigFromEnv(env) {
   const raw = env.MLJ_PROVIDER_ORDER?.trim() || (groqEnabled ? GROQ_FALLBACK_ORDER : DEFAULT_PROVIDER_ORDER);
   /** @type {ProviderId[]} */
   const order = [];
-  for (const id of raw.split(",").map((x) => x.trim().toLowerCase())) {
-    if (!(/** @type {readonly string[]} */ (PROVIDER_IDS)).includes(id)) continue;
-    if (id === "groq" && !groqEnabled) continue;
-    if (!order.includes(/** @type {ProviderId} */ (id))) order.push(/** @type {ProviderId} */ (id));
+  if (raw.toLowerCase() === "groq") {
+    // Exactly "groq": Groq only (warned), or the default when Groq is disabled.
+    if (groqEnabled) {
+      order.push("groq");
+      warnOnce("groq-only", { warn: "provider-order", groqOnly: true });
+    } else {
+      order.push("gemini-primary", "gemini-lite");
+    }
+  } else {
+    /** @type {string[]} */
+    const unknown = [];
+    for (const id of raw.split(",").map((x) => x.trim().toLowerCase()).filter(Boolean)) {
+      if (!(/** @type {readonly string[]} */ (PROVIDER_IDS)).includes(id)) { unknown.push(id); continue; }
+      if (id === "groq" && !groqEnabled) continue;
+      if (!order.includes(/** @type {ProviderId} */ (id))) order.push(/** @type {ProviderId} */ (id));
+    }
+    // Env names only (sanitized), never user data or keys.
+    if (unknown.length) warnOnce("unknown", { warn: "provider-order", dropped: unknown.map((u) => u.replace(/[^a-z0-9-]/g, "").slice(0, 32)) });
+    if (!order.length) {
+      order.push("gemini-primary", "gemini-lite");
+    } else if (unknown.length || !order.includes("gemini-primary")) {
+      if (!order.includes("gemini-primary")) {
+        order.push("gemini-primary");
+        warnOnce("primary-added", { warn: "provider-order", added: "gemini-primary", order: [...order] });
+      }
+    }
   }
-  if (!order.length) order.push("gemini-primary", "gemini-lite");
   return {
     order,
     groqEnabled,
@@ -249,7 +281,8 @@ export function chainConfigFromEnv(env) {
 /** @param {unknown} err  Groq 429/5xx are capacity errors: no retry, move on / BUSY. */
 function isCapacity(err) {
   const s = Number(/** @type {{ status?: unknown }} */ (err)?.status);
-  return isOverloaded(err) || s === 429 || (s >= 500 && s <= 599);
+  // 401/403 (GROQ_AUTH) and a malformed 200 body (502) also move on: Gemini can still answer.
+  return isOverloaded(err) || s === 429 || s === 401 || s === 403 || (s >= 500 && s <= 599);
 }
 
 /**
@@ -325,7 +358,8 @@ export async function withModelFallback(task, signal, opts = {}) {
   }
   report(null);
   // Classic single-provider order keeps its old contract: a lone failure is rethrown.
-  if (tried.length === 1 && order.length === 1) throw tried[0].err;
+  // Groq failures always end as BUSY.
+  if (tried.length === 1 && order.length === 1 && tried[0].provider !== "groq") throw tried[0].err;
   throw overloadedError();
 }
 
@@ -363,7 +397,7 @@ export function logSafe(route, code, err, opts = {}) {
   const e = /** @type {{ status?: unknown, code?: unknown, name?: unknown, message?: unknown } | null} */ (err);
   const message = typeof e?.message === "string" ? e.message : "";
   const providerCode =
-    message.match(/\b(RESOURCE_EXHAUSTED|UNAVAILABLE|DEADLINE_EXCEEDED|INVALID_ARGUMENT|PERMISSION_DENIED|NOT_FOUND|INTERNAL)\b/)?.[1] ?? null;
+    message.match(/\b(GROQ_AUTH|RESOURCE_EXHAUSTED|UNAVAILABLE|DEADLINE_EXCEEDED|INVALID_ARGUMENT|PERMISSION_DENIED|NOT_FOUND|INTERNAL)\b/)?.[1] ?? null;
   const status = Number(e?.status ?? e?.code);
   const capacity =
     providerCode !== "INVALID_ARGUMENT" &&

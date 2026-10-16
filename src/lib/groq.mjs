@@ -41,11 +41,20 @@ export async function groqGenerate(prompt, signal, opts = {}) {
   });
   if (!res.ok) {
     const status = res.status;
-    const code = status === 429 ? "RESOURCE_EXHAUSTED" : status >= 500 ? "UNAVAILABLE" : "INTERNAL";
+    const code =
+      status === 401 || status === 403 ? "GROQ_AUTH" : status === 429 ? "RESOURCE_EXHAUSTED" : status >= 500 ? "UNAVAILABLE" : "INTERNAL";
     throw Object.assign(new Error(`${code}: groq HTTP ${status}`), { status });
   }
-  const data = await res.json();
+  // Non-JSON / malformed 200 -> retryable provider failure (502), not SERVER.
+  const badBody = () => Object.assign(new Error("UNAVAILABLE: groq malformed body"), { status: 502 });
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    throw badBody();
+  }
   const choice = data?.choices?.[0];
+  if (!choice || typeof choice?.message?.content !== "string") throw badBody();
   const finish = choice?.finish_reason;
   return {
     text: typeof choice?.message?.content === "string" ? choice.message.content : "",

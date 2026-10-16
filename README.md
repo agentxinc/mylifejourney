@@ -33,3 +33,10 @@ after a 10s primary timeout + 4s lite, ~0.3s is left and Groq is skipped.
 **Logs.** One line per fallback (`retry: "gemini-fallback"` by default,
 `"provider-chain"` with a custom order/Groq, including `answeredBy:
 "<provider>:<model>"`). Never user text, never keys.
+
+**Order validation.** Exactly `groq` means Groq only (one warning log line);
+if Groq is disabled the default order is used. For any other value: unknown
+names and duplicates are dropped (unknown names are warned once), and if
+`gemini-primary` is missing it is appended (warned). If nothing valid remains
+the default order is used. A Groq 401/403 (`GROQ_AUTH`, status only) or a
+malformed 200 body moves on to the next provider, or BUSY if Groq is last.

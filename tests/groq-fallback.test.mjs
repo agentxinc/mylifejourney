@@ -1,7 +1,7 @@
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import {
-  withTimeout, withModelFallback, chainConfigFromEnv, classifyError, retryLog, logSafe,
+  withTimeout, withModelFallback, chainConfigFromEnv, classifyError, retryLog, logSafe, resetConfigWarnings,
   SERVER_TIMEOUT_MS, PRIMARY_TIMEOUT_MS, FALLBACK_TIMEOUT_MS, GROQ_TIMEOUT_MS,
 } from "../src/lib/generate-errors.mjs";
 import { groqGenerate, GROQ_URL, DEFAULT_GROQ_MODEL } from "../src/lib/groq.mjs";
@@ -198,3 +198,96 @@ test("no user text or key in logs (retry log + logSafe) on Groq paths", async ()
   assert.ok(!all.includes(KEY), "no key");
   assert.ok(all.includes('"answeredBy":"groq:openai/gpt-oss-120b"'));
 });
+
+function captureWarns(fn) {
+  const lines = []; const ow = console.warn;
+  console.warn = (s) => lines.push(String(s));
+  try { fn(); } finally { console.warn = ow; }
+  return lines;
+}
+
+test("order: exactly 'groq' -> Groq only (warned); default when Groq disabled", () => {
+  resetConfigWarnings();
+  let a;
+  const lines = captureWarns(() => { a = chainConfigFromEnv({ ...ON, MLJ_PROVIDER_ORDER: " groq " }); });
+  assert.deepEqual(a.order, ["groq"]);
+  assert.deepEqual(lines.map((l) => JSON.parse(l)), [{ warn: "provider-order", groqOnly: true }]);
+  assert.ok(!lines.join().includes(KEY));
+  assert.deepEqual(chainConfigFromEnv({ MLJ_PROVIDER_ORDER: "groq" }).order, ["gemini-primary", "gemini-lite"]);
+});
+
+test("order: typo order drops unknown (warned once), removes duplicates, keeps gemini-primary", () => {
+  resetConfigWarnings();
+  let cfg;
+  const lines = captureWarns(() => {
+    cfg = chainConfigFromEnv({ ...ON, MLJ_PROVIDER_ORDER: "gemini-primary,gemni-lite,groq,gemini-primary,groq" });
+    chainConfigFromEnv({ ...ON, MLJ_PROVIDER_ORDER: "gemini-primary,bogus" });
+  });
+  assert.deepEqual(cfg.order, ["gemini-primary", "groq"]);
+  assert.deepEqual(lines.map((l) => JSON.parse(l)), [{ warn: "provider-order", dropped: ["gemni-lite"] }]);
+});
+
+test("order: valid order without gemini-primary gets it appended (warned)", () => {
+  resetConfigWarnings();
+  let a, b;
+  const lines = captureWarns(() => {
+    a = chainConfigFromEnv({ ...ON, MLJ_PROVIDER_ORDER: "gemini-lite,groq" });
+    b = chainConfigFromEnv({ ...ON, MLJ_PROVIDER_ORDER: "groq,typo" });
+  });
+  assert.deepEqual(a.order, ["gemini-lite", "groq", "gemini-primary"]);
+  assert.deepEqual(b.order, ["groq", "gemini-primary"]);
+  assert.deepEqual(JSON.parse(lines[0]), { warn: "provider-order", added: "gemini-primary", order: ["gemini-lite", "groq", "gemini-primary"] });
+});
+
+test("order: all-unknown order -> default", () => {
+  resetConfigWarnings();
+  let cfg;
+  const lines = captureWarns(() => { cfg = chainConfigFromEnv({ ...ON, MLJ_PROVIDER_ORDER: "nope, ,also-nope" }); });
+  assert.deepEqual(cfg.order, ["gemini-primary", "gemini-lite"]);
+  assert.equal(lines.length, 1);
+});
+
+test("groq-only order: success answers; failure -> BUSY", async () => {
+  resetConfigWarnings();
+  const ow = console.warn; console.warn = () => {};
+  try {
+    const env = { ...ON, MLJ_PROVIDER_ORDER: "groq" };
+    const ok = await runChain(env, { gemini: both503, logs: [] });
+    assert.ok(ok.out.includes('"pages"'));
+    const bad = await runChain(env, { gemini: both503, groqFetch: fakeFetch(() => jsonRes(401, {})), logs: [] });
+    assert.equal(classifyError(bad.err), "BUSY");
+  } finally { console.warn = ow; }
+});
+
+for (const [name, handler] of [
+  ["non-JSON", () => new Response("<html>oops</html>", { status: 200 })],
+  ["malformed JSON shape", () => jsonRes(200, { foo: 1 })],
+]) {
+  test(`Groq 200 ${name} body -> retryable: next provider answers, or BUSY when last`, async () => {
+    const r = await runChain({ ...ON, MLJ_PROVIDER_ORDER: "groq,gemini-primary" },
+      { groqFetch: fakeFetch(handler), gemini: { primary: async () => "gemini-ok", fallback: async () => "x" }, logs: [] });
+    assert.equal(r.out, "gemini-ok");
+    const last = await runChain(ON, { gemini: both503, groqFetch: fakeFetch(handler), logs: [] });
+    assert.equal(classifyError(last.err), "BUSY");
+  });
+}
+
+for (const status of [401, 403]) {
+  test(`Groq ${status} -> GROQ_AUTH logged (status only, no key), Gemini still answers; BUSY when last`, async () => {
+    const lines = [];
+    const ow = console.warn; console.warn = (s) => lines.push(String(s));
+    try {
+      const g = fakeFetch(() => jsonRes(status, { error: { message: `invalid key ${KEY}` } }));
+      const r = await runChain({ ...ON, MLJ_PROVIDER_ORDER: "groq,gemini-primary" },
+        { groqFetch: g, gemini: { primary: async () => "gemini-ok", fallback: async () => "x" } });
+      assert.equal(r.out, "gemini-ok");
+      assert.equal(g.calls.length, 1);
+      const last = await runChain(ON, { gemini: both503, groqFetch: fakeFetch(() => jsonRes(status, {})), logs: [] });
+      assert.equal(classifyError(last.err), "BUSY");
+    } finally { console.warn = ow; }
+    const line = JSON.parse(lines.find((l) => l.includes("provider-chain")));
+    assert.deepEqual(line.attempts[0], { provider: "groq", status, code: "GROQ_AUTH" });
+    assert.equal(line.answeredBy, "gemini-primary");
+    assert.ok(!lines.join().includes(KEY));
+  });
+}
