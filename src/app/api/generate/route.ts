@@ -13,6 +13,7 @@ import {
   withModelFallback,
   retryLog,
 } from "@/lib/generate-errors.mjs";
+import { stripEventImages } from "@/lib/strip-images.mjs";
 import { LifeEvent } from "@/types";
 
 // Keep above SERVER_TIMEOUT_MS (14.5s) so our JSON TIMEOUT always wins over a
@@ -39,6 +40,8 @@ export async function POST(request: NextRequest) {
   let events: LifeEvent[];
   try {
     ({ events } = await request.json());
+    // Old cached clients may still send photos: drop them, don't 400.
+    events = stripEventImages(events) as LifeEvent[];
   } catch {
     return reply(errorPayload("BAD_INPUT"));
   }
