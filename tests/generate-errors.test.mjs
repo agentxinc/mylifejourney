@@ -24,7 +24,7 @@ const roundTrip = async (res) =>
   parseErrorResponse(res.status, await res.text(), res.headers.get("Retry-After"));
 
 test("timeouts: server cutoff fires before the page cutoff", () => {
-  assert.equal(SERVER_TIMEOUT_MS, 25_000);
+  assert.equal(SERVER_TIMEOUT_MS, 14_500);
   assert.equal(CLIENT_TIMEOUT_MS, 30_000);
   assert.ok(SERVER_TIMEOUT_MS < CLIENT_TIMEOUT_MS);
 });
@@ -145,35 +145,94 @@ test("copy: every state says entries are still here (except BAD_INPUT); Regenera
   assert.equal(IMPROVE_ERROR_COPY.EMPTY, "We couldn't improve this one — your original is unchanged.");
 });
 
-import { retryOnOverload, isOverloaded } from "../src/lib/generate-errors.mjs";
+import { withModelFallback, isOverloaded } from "../src/lib/generate-errors.mjs";
 
 const e503 = Object.assign(new Error("UNAVAILABLE: The model is overloaded"), { status: 503 });
 const e429 = Object.assign(new Error("RESOURCE_EXHAUSTED: quota"), { status: 429 });
+const fast = { primaryMs: 1_000, fallbackMs: 1_000, baseMs: 1, random: () => 0 };
 
-test("503 retries once and can succeed; 429 and others never retry", async () => {
-  let calls = 0;
-  const ok = await retryOnOverload(async () => (++calls === 1 ? Promise.reject(e503) : "story"), undefined, { baseMs: 1, random: () => 0 });
+test("503 falls back once and can succeed; 429 and others never retry", async () => {
+  const seen = [];
+  const ok = await withModelFallback(async (w) => (seen.push(w), w === "primary" ? Promise.reject(e503) : "story"), undefined, fast);
   assert.equal(ok, "story");
-  assert.equal(calls, 2);
+  assert.deepEqual(seen, ["primary", "fallback"]);
   for (const err of [e429, new Error("boom")]) {
-    calls = 0;
-    await assert.rejects(retryOnOverload(async () => { calls++; throw err; }, undefined, { baseMs: 1 }), err);
+    let calls = 0;
+    await assert.rejects(withModelFallback(async () => { calls++; throw err; }, undefined, fast), err);
     assert.equal(calls, 1);
   }
-  calls = 0;
-  await assert.rejects(retryOnOverload(async () => { calls++; throw e503; }, undefined, { baseMs: 1, random: () => 0 }), e503);
-  assert.equal(calls, 2, "at most one retry");
+  let calls = 0;
+  await assert.rejects(withModelFallback(async () => { calls++; throw e503; }, undefined, fast), { status: 503 });
+  assert.equal(calls, 2, "at most one fallback");
   assert.equal(isOverloaded(e429), false);
   assert.equal(isOverloaded(Object.assign(new Error("UNAVAILABLE but RESOURCE_EXHAUSTED"), { status: 503 })), false);
 });
 
-test("retry wait respects the timeout's abort signal", async () => {
+test("fallback wait respects the hard-cap abort signal", async () => {
   const ac = new AbortController();
   let calls = 0;
   const t = Date.now();
-  const p = retryOnOverload(async () => { calls++; throw e503; }, ac.signal, { baseMs: 5_000 });
+  const p = withModelFallback(async () => { calls++; throw e503; }, ac.signal, { ...fast, baseMs: 5_000 });
   setTimeout(() => ac.abort(), 20);
   await assert.rejects(p, e503);
   assert.equal(calls, 1);
   assert.ok(Date.now() - t < 1_000);
+});
+
+import { retryLog, logSafe as logSafe2 } from "../src/lib/generate-errors.mjs";
+import { readFileSync } from "node:fs";
+
+function captureWarn(fn) {
+  const lines = [];
+  const orig = console.warn;
+  console.warn = (s) => lines.push(JSON.parse(s));
+  return fn().finally(() => { console.warn = orig; }).then(() => lines, () => lines);
+}
+
+test("gemini-fallback log: primary and fallback providerStatus/providerCode are separate fields", async () => {
+  const e503 = Object.assign(new Error("UNAVAILABLE: overloaded"), { status: 503 });
+  const e500 = Object.assign(new Error("INTERNAL error"), { status: 500 });
+  // fallback succeeds
+  let lines = await captureWarn(() =>
+    withModelFallback(async (w) => { if (w === "primary") throw e503; return "ok"; }, undefined, { baseMs: 0, random: () => 0, onRetry: retryLog("generate") })
+  );
+  assert.deepEqual(lines, [{ route: "generate", retry: "gemini-fallback", primaryProviderStatus: 503, primaryProviderCode: "UNAVAILABLE", fallbackOk: true, fallbackProviderStatus: null, fallbackProviderCode: null }]);
+  // fallback fails with a different error
+  lines = await captureWarn(() =>
+    withModelFallback(async (w) => { throw w === "primary" ? e503 : e500; }, undefined, { baseMs: 0, random: () => 0, onRetry: retryLog("improve") })
+  );
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].primaryProviderStatus, 503);
+  assert.equal(lines[0].primaryProviderCode, "UNAVAILABLE");
+  assert.equal(lines[0].fallbackOk, false);
+  assert.equal(lines[0].fallbackProviderStatus, 500);
+  assert.equal(lines[0].fallbackProviderCode, "INTERNAL");
+  assert.ok(!JSON.stringify(lines).includes("overloaded"), "no provider message in retry log");
+});
+
+test("logSafe: provider message is dropped when it echoes an event description", () => {
+  const out = [];
+  const orig = console.error;
+  console.error = (s) => out.push(JSON.parse(s));
+  try {
+    const err = Object.assign(new Error("UNAVAILABLE: while handling 'my secret wedding day'"), { status: 503 });
+    logSafe2("generate", "BUSY", err, { userTexts: ["Wedding", "my secret wedding day"] });
+  } finally { console.error = orig; }
+  assert.equal(out[0].providerMessage, undefined);
+});
+
+test("generate route guards both event titles and descriptions", () => {
+  const src = readFileSync(new URL("../src/app/api/generate/route.ts", import.meta.url), "utf8");
+  assert.match(src, /userTexts:\s*events\.flatMap\(\(e\) => \[e\.title, e\.description\]\)/);
+});
+
+test("improve route guards feedback and the story text being improved", () => {
+  const src = readFileSync(new URL("../src/app/api/improve/route.ts", import.meta.url), "utf8");
+  assert.match(src, /userTexts:\s*\[feedback, story\.title, story\.subtitle, \.\.\.story\.pages\.flatMap\(\(p\) => \[p\.title, p\.narrative\]\)\]/);
+});
+
+test("gemini primary default is 3.5-flash, fallback 3.5-flash-lite", () => {
+  const src = readFileSync(new URL("../src/lib/gemini.ts", import.meta.url), "utf8");
+  assert.match(src, /const DEFAULT_MODEL = "gemini-3\.5-flash";/);
+  assert.match(src, /const DEFAULT_FALLBACK_MODEL = "gemini-3\.5-flash-lite";/);
 });

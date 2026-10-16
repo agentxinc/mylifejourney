@@ -9,12 +9,12 @@ import {
   logSafe,
   mockResponse,
   withTimeout,
-  retryOnOverload,
+  withModelFallback,
   retryLog,
 } from "@/lib/generate-errors.mjs";
 import { StoryPage } from "@/types";
 
-// Keep above SERVER_TIMEOUT_MS (25s); see /api/generate.
+// Keep above SERVER_TIMEOUT_MS (14.5s); see /api/generate.
 export const maxDuration = 60;
 
 function reply(p: ReturnType<typeof errorPayload>) {
@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const improved = await withTimeout(
-      (signal) => retryOnOverload((s) => improveStory(story, feedback, s), signal, { onRetry: retryLog("improve") }),
+      (signal) => withModelFallback((which, sig) => improveStory(story, feedback, sig, which), signal, { onRetry: retryLog("improve") }),
       SERVER_TIMEOUT_MS
     );
     return NextResponse.json({
@@ -57,7 +57,9 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     const code = classifyError(error);
-    logSafe("improve", code, error);
+    logSafe("improve", code, error, {
+      userTexts: [feedback, story.title, story.subtitle, ...story.pages.flatMap((p) => [p.title, p.narrative])],
+    });
     return reply(errorPayload(code));
   }
 }
