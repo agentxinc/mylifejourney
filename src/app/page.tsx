@@ -16,6 +16,7 @@ import {
   GENERATE_ERROR_COPY,
   IMPROVE_ERROR_COPY,
   SLOW_HINT_MS,
+  STILL_WRITING_COPY,
   classifyFetchFailure,
   isUsableStory,
   parseErrorResponse,
@@ -151,6 +152,7 @@ export default function Home() {
   const generateBtnRef = useRef<HTMLButtonElement>(null);
   const pendingFocus = useRef(false);
   const wasWaiting = useRef(false);
+  const slowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [view, setView] = useState<"input" | "preview">("input");
   const [quote, setQuote] = useState<{ text: string; author: string } | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
@@ -213,6 +215,16 @@ export default function Home() {
     }
   }, [busyWait]);
 
+  // Drop the Generate slow-hint timer on unmount so it cannot fire after leave.
+  useEffect(() => {
+    return () => {
+      if (slowTimerRef.current !== null) {
+        clearTimeout(slowTimerRef.current);
+        slowTimerRef.current = null;
+      }
+    };
+  }, []);
+
   // Move focus to "Try again" once the request has finished. During a BUSY
   // countdown the button is aria-disabled (not disabled), so it keeps focus.
   useEffect(() => {
@@ -263,7 +275,13 @@ export default function Home() {
     pendingFocus.current = false;
     setError(null);
     setShowSlowHint(false);
-    const slowTimer = setTimeout(() => setShowSlowHint(true), SLOW_HINT_MS);
+    if (slowTimerRef.current !== null) clearTimeout(slowTimerRef.current);
+    // One polite announcement via the existing role=status region; no second live region.
+    slowTimerRef.current = setTimeout(() => {
+      slowTimerRef.current = null;
+      setShowSlowHint(true);
+      setStatusMessage(STILL_WRITING_COPY);
+    }, SLOW_HINT_MS);
     try {
       await run();
       busyStreak.current = 0;
@@ -272,7 +290,10 @@ export default function Home() {
       showError(err, flow);
       return false;
     } finally {
-      clearTimeout(slowTimer);
+      if (slowTimerRef.current !== null) {
+        clearTimeout(slowTimerRef.current);
+        slowTimerRef.current = null;
+      }
       setShowSlowHint(false);
       inFlight.current = false;
     }
@@ -441,7 +462,9 @@ export default function Home() {
                 aria-busy={isGenerating}
               >
                 {isGenerating
-                  ? "Creating Your Storybook..."
+                  ? showSlowHint
+                    ? STILL_WRITING_COPY
+                    : "Creating Your Storybook..."
                   : busyWait > 0
                     ? `Try again in ${busyWait}s`
                     : error && error.flow === "generate"
@@ -456,12 +479,11 @@ export default function Home() {
               )}
               {isGenerating && (
                 <p className="text-sm text-gray-400 mt-3" aria-hidden="true">
-                  AI is crafting your personalized story...
+                  {showSlowHint
+                    ? STILL_WRITING_COPY
+                    : "AI is crafting your personalized story..."}
                 </p>
               )}
-              <p className="text-sm text-gray-500 mt-2" aria-live="polite">
-                {isGenerating && showSlowHint ? "Still writing your story…" : ""}
-              </p>
             </div>
           </>
         ) : (
@@ -482,3 +504,5 @@ export default function Home() {
     </main>
   );
 }
+
+

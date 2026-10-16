@@ -4,6 +4,8 @@ import {
   BUSY_WAIT_COPY,
   CLIENT_TIMEOUT_MS,
   SERVER_TIMEOUT_MS,
+  SLOW_HINT_MS,
+  STILL_WRITING_COPY,
   EmptyResultError,
   GENERATE_ERROR_COPY,
   IMPROVE_ERROR_COPY,
@@ -27,6 +29,12 @@ test("timeouts: server cutoff fires before the page cutoff", () => {
   assert.equal(SERVER_TIMEOUT_MS, 14_500);
   assert.equal(CLIENT_TIMEOUT_MS, 30_000);
   assert.ok(SERVER_TIMEOUT_MS < CLIENT_TIMEOUT_MS);
+});
+
+test("SLOW_HINT_MS is ~6s and STILL_WRITING_COPY is stable", () => {
+  assert.equal(SLOW_HINT_MS, 6_000);
+  assert.equal(STILL_WRITING_COPY, "Still writing your story…");
+  assert.ok(SLOW_HINT_MS < CLIENT_TIMEOUT_MS);
 });
 
 test("BUSY: Gemini quota / 429 / 503 map to BUSY with Retry-After", async () => {
@@ -236,3 +244,5 @@ test("gemini primary default is 3.5-flash, fallback 3.5-flash-lite", () => {
   assert.match(src, /const DEFAULT_MODEL = "gemini-3\.5-flash";/);
   assert.match(src, /const DEFAULT_FALLBACK_MODEL = "gemini-3\.5-flash-lite";/);
 });
+
+
