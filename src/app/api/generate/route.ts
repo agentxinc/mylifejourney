@@ -57,7 +57,7 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     const code = classifyError(error);
-    logSafe("generate", code, error, { userTexts: events.map((e) => e.title) });
+    logSafe("generate", code, error, { userTexts: events.flatMap((e) => [e.title, e.description]) });
     return reply(errorPayload(code));
   }
 }

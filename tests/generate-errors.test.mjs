@@ -178,3 +178,50 @@ test("fallback wait respects the hard-cap abort signal", async () => {
   assert.equal(calls, 1);
   assert.ok(Date.now() - t < 1_000);
 });
+
+import { retryLog, logSafe as logSafe2 } from "../src/lib/generate-errors.mjs";
+import { readFileSync } from "node:fs";
+
+function captureWarn(fn) {
+  const lines = [];
+  const orig = console.warn;
+  console.warn = (s) => lines.push(JSON.parse(s));
+  return fn().finally(() => { console.warn = orig; }).then(() => lines, () => lines);
+}
+
+test("gemini-fallback log: primary and fallback providerStatus/providerCode are separate fields", async () => {
+  const e503 = Object.assign(new Error("UNAVAILABLE: overloaded"), { status: 503 });
+  const e500 = Object.assign(new Error("INTERNAL error"), { status: 500 });
+  // fallback succeeds
+  let lines = await captureWarn(() =>
+    withModelFallback(async (w) => { if (w === "primary") throw e503; return "ok"; }, undefined, { baseMs: 0, random: () => 0, onRetry: retryLog("generate") })
+  );
+  assert.deepEqual(lines, [{ route: "generate", retry: "gemini-fallback", primaryProviderStatus: 503, primaryProviderCode: "UNAVAILABLE", fallbackOk: true, fallbackProviderStatus: null, fallbackProviderCode: null }]);
+  // fallback fails with a different error
+  lines = await captureWarn(() =>
+    withModelFallback(async (w) => { throw w === "primary" ? e503 : e500; }, undefined, { baseMs: 0, random: () => 0, onRetry: retryLog("improve") })
+  );
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].primaryProviderStatus, 503);
+  assert.equal(lines[0].primaryProviderCode, "UNAVAILABLE");
+  assert.equal(lines[0].fallbackOk, false);
+  assert.equal(lines[0].fallbackProviderStatus, 500);
+  assert.equal(lines[0].fallbackProviderCode, "INTERNAL");
+  assert.ok(!JSON.stringify(lines).includes("overloaded"), "no provider message in retry log");
+});
+
+test("logSafe: provider message is dropped when it echoes an event description", () => {
+  const out = [];
+  const orig = console.error;
+  console.error = (s) => out.push(JSON.parse(s));
+  try {
+    const err = Object.assign(new Error("UNAVAILABLE: while handling 'my secret wedding day'"), { status: 503 });
+    logSafe2("generate", "BUSY", err, { userTexts: ["Wedding", "my secret wedding day"] });
+  } finally { console.error = orig; }
+  assert.equal(out[0].providerMessage, undefined);
+});
+
+test("generate route guards both event titles and descriptions", () => {
+  const src = readFileSync(new URL("../src/app/api/generate/route.ts", import.meta.url), "utf8");
+  assert.match(src, /userTexts:\s*events\.flatMap\(\(e\) => \[e\.title, e\.description\]\)/);
+});

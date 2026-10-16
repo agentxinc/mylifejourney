@@ -133,8 +133,42 @@ export function isOverloaded(err) {
   return /UNAVAILABLE|overloaded|\b503\b/i.test(message);
 }
 
-/** Log line for a 503 retry (no user data). @param {string} route */
-export const retryLog = (route) => () => console.warn(JSON.stringify({ route, retry: "gemini-fallback" }));
+/**
+ * Provider status/code of an error (no message, so no user data).
+ * @param {unknown} err
+ * @returns {{ status: unknown, code: string | null }}
+ */
+export function providerInfo(err) {
+  if (err == null) return { status: null, code: null };
+  const e = /** @type {{ status?: unknown, code?: unknown, message?: unknown }} */ (err);
+  const message = typeof e?.message === "string" ? e.message : "";
+  const code =
+    message.match(/\b(RESOURCE_EXHAUSTED|UNAVAILABLE|DEADLINE_EXCEEDED|INVALID_ARGUMENT|PERMISSION_DENIED|NOT_FOUND|INTERNAL)\b/)?.[1] ??
+    (err instanceof TimeoutError ? "TIMEOUT" : null);
+  return { status: e?.status ?? e?.code ?? null, code };
+}
+
+/**
+ * Log line for a 503 retry (no user data). Called once the fallback attempt
+ * has settled; primary and fallback provider status/code are separate fields.
+ * @param {string} route
+ * @returns {(primaryErr: unknown, fallbackErr?: unknown) => void}
+ */
+export const retryLog = (route) => (primaryErr, fallbackErr) => {
+  const p = providerInfo(primaryErr);
+  const f = providerInfo(fallbackErr);
+  console.warn(
+    JSON.stringify({
+      route,
+      retry: "gemini-fallback",
+      primaryProviderStatus: p.status,
+      primaryProviderCode: p.code,
+      fallbackOk: fallbackErr == null,
+      fallbackProviderStatus: f.status,
+      fallbackProviderCode: f.code,
+    })
+  );
+};
 
 /** Base wait before the fallback attempt; jitter adds 0-200ms. */
 export const RETRY_BASE_MS = 200;
@@ -170,7 +204,7 @@ function overloadedError() {
  * @template T
  * @param {(which: "primary" | "fallback", signal: AbortSignal) => Promise<T>} task
  * @param {AbortSignal} [signal]  outer hard-cap signal (from withTimeout)
- * @param {{ primaryMs?: number, fallbackMs?: number, baseMs?: number, random?: () => number, onRetry?: (err: unknown) => void }} [opts]
+ * @param {{ primaryMs?: number, fallbackMs?: number, baseMs?: number, random?: () => number, onRetry?: (primaryErr: unknown, fallbackErr?: unknown) => void }} [opts]
  * @returns {Promise<T>}
  */
 export async function withModelFallback(task, signal, opts = {}) {
@@ -182,13 +216,16 @@ export async function withModelFallback(task, signal, opts = {}) {
     if (!(isOverloaded(err) || err instanceof TimeoutError) || signal?.aborted) throw err;
     const wait = (opts.baseMs ?? RETRY_BASE_MS) + Math.floor((opts.random ?? Math.random)() * 200);
     await abortableWait(wait, signal, err);
-    opts.onRetry?.(err);
+    let result;
     try {
-      return await withTimeout((s) => task("fallback", linkSignals(signal, s)), fallbackMs);
+      result = await withTimeout((s) => task("fallback", linkSignals(signal, s)), fallbackMs);
     } catch (err2) {
+      opts.onRetry?.(err, err2);
       if (isOverloaded(err2) || err2 instanceof TimeoutError) throw overloadedError();
       throw err2;
     }
+    opts.onRetry?.(err, undefined);
+    return result;
   }
 }
 
