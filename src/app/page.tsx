@@ -20,6 +20,8 @@ import {
   isUsableStory,
   parseErrorResponse,
 } from "@/lib/generate-errors.mjs";
+import { GENERATE_NOTE } from "@/lib/privacy-copy.mjs";
+import Link from "next/link";
 
 type ClientError = ReturnType<typeof parseErrorResponse>;
 type Flow = "generate" | "improve";
@@ -439,6 +441,7 @@ export default function Home() {
                 disabled={isGenerating || events.length === 0}
                 aria-disabled={busyWait > 0 || undefined}
                 aria-busy={isGenerating}
+                aria-describedby="generate-privacy-note"
               >
                 {isGenerating
                   ? "Creating Your Storybook..."
@@ -448,6 +451,16 @@ export default function Home() {
                       ? "Try again"
                       : "Generate My Life Storybook"}
               </button>
+              {/* Always rendered (not conditional) so it never shifts layout. */}
+              <p id="generate-privacy-note" className="text-sm text-gray-700 mt-3">
+                {GENERATE_NOTE}{" "}
+                <Link
+                  href="/privacy"
+                  className="text-indigo-700 underline underline-offset-2 hover:text-indigo-900"
+                >
+                  Privacy
+                </Link>
+              </p>
               {events.length === 0 && (
                 <p className="text-sm text-gray-400 mt-3">
                   Add at least one life event above, or try a sample story, to
