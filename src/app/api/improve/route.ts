@@ -57,7 +57,9 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     const code = classifyError(error);
-    logSafe("improve", code, error, { userTexts: [feedback] });
+    logSafe("improve", code, error, {
+      userTexts: [feedback, story.title, story.subtitle, ...story.pages.flatMap((p) => [p.title, p.narrative])],
+    });
     return reply(errorPayload(code));
   }
 }

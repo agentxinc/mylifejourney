@@ -51,7 +51,7 @@ function parseStoryJson(
 }
 
 /** Gemini 2.5* is limited to prior users; new API keys get 404 NOT_FOUND. */
-const DEFAULT_MODEL = "gemini-3.8-flash";
+const DEFAULT_MODEL = "gemini-3.5-flash";
 /** Used once when the primary is overloaded (503) or slow. */
 const DEFAULT_FALLBACK_MODEL = "gemini-3.5-flash-lite";
 

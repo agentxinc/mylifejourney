@@ -225,3 +225,14 @@ test("generate route guards both event titles and descriptions", () => {
   const src = readFileSync(new URL("../src/app/api/generate/route.ts", import.meta.url), "utf8");
   assert.match(src, /userTexts:\s*events\.flatMap\(\(e\) => \[e\.title, e\.description\]\)/);
 });
+
+test("improve route guards feedback and the story text being improved", () => {
+  const src = readFileSync(new URL("../src/app/api/improve/route.ts", import.meta.url), "utf8");
+  assert.match(src, /userTexts:\s*\[feedback, story\.title, story\.subtitle, \.\.\.story\.pages\.flatMap\(\(p\) => \[p\.title, p\.narrative\]\)\]/);
+});
+
+test("gemini primary default is 3.5-flash, fallback 3.5-flash-lite", () => {
+  const src = readFileSync(new URL("../src/lib/gemini.ts", import.meta.url), "utf8");
+  assert.match(src, /const DEFAULT_MODEL = "gemini-3\.5-flash";/);
+  assert.match(src, /const DEFAULT_FALLBACK_MODEL = "gemini-3\.5-flash-lite";/);
+});
