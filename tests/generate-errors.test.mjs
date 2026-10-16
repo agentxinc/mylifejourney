@@ -24,7 +24,7 @@ const roundTrip = async (res) =>
   parseErrorResponse(res.status, await res.text(), res.headers.get("Retry-After"));
 
 test("timeouts: server cutoff fires before the page cutoff", () => {
-  assert.equal(SERVER_TIMEOUT_MS, 25_000);
+  assert.equal(SERVER_TIMEOUT_MS, 14_500);
   assert.equal(CLIENT_TIMEOUT_MS, 30_000);
   assert.ok(SERVER_TIMEOUT_MS < CLIENT_TIMEOUT_MS);
 });
@@ -145,33 +145,34 @@ test("copy: every state says entries are still here (except BAD_INPUT); Regenera
   assert.equal(IMPROVE_ERROR_COPY.EMPTY, "We couldn't improve this one — your original is unchanged.");
 });
 
-import { retryOnOverload, isOverloaded } from "../src/lib/generate-errors.mjs";
+import { withModelFallback, isOverloaded } from "../src/lib/generate-errors.mjs";
 
 const e503 = Object.assign(new Error("UNAVAILABLE: The model is overloaded"), { status: 503 });
 const e429 = Object.assign(new Error("RESOURCE_EXHAUSTED: quota"), { status: 429 });
+const fast = { primaryMs: 1_000, fallbackMs: 1_000, baseMs: 1, random: () => 0 };
 
-test("503 retries once and can succeed; 429 and others never retry", async () => {
-  let calls = 0;
-  const ok = await retryOnOverload(async () => (++calls === 1 ? Promise.reject(e503) : "story"), undefined, { baseMs: 1, random: () => 0 });
+test("503 falls back once and can succeed; 429 and others never retry", async () => {
+  const seen = [];
+  const ok = await withModelFallback(async (w) => (seen.push(w), w === "primary" ? Promise.reject(e503) : "story"), undefined, fast);
   assert.equal(ok, "story");
-  assert.equal(calls, 2);
+  assert.deepEqual(seen, ["primary", "fallback"]);
   for (const err of [e429, new Error("boom")]) {
-    calls = 0;
-    await assert.rejects(retryOnOverload(async () => { calls++; throw err; }, undefined, { baseMs: 1 }), err);
+    let calls = 0;
+    await assert.rejects(withModelFallback(async () => { calls++; throw err; }, undefined, fast), err);
     assert.equal(calls, 1);
   }
-  calls = 0;
-  await assert.rejects(retryOnOverload(async () => { calls++; throw e503; }, undefined, { baseMs: 1, random: () => 0 }), e503);
-  assert.equal(calls, 2, "at most one retry");
+  let calls = 0;
+  await assert.rejects(withModelFallback(async () => { calls++; throw e503; }, undefined, fast), { status: 503 });
+  assert.equal(calls, 2, "at most one fallback");
   assert.equal(isOverloaded(e429), false);
   assert.equal(isOverloaded(Object.assign(new Error("UNAVAILABLE but RESOURCE_EXHAUSTED"), { status: 503 })), false);
 });
 
-test("retry wait respects the timeout's abort signal", async () => {
+test("fallback wait respects the hard-cap abort signal", async () => {
   const ac = new AbortController();
   let calls = 0;
   const t = Date.now();
-  const p = retryOnOverload(async () => { calls++; throw e503; }, ac.signal, { baseMs: 5_000 });
+  const p = withModelFallback(async () => { calls++; throw e503; }, ac.signal, { ...fast, baseMs: 5_000 });
   setTimeout(() => ac.abort(), 20);
   await assert.rejects(p, e503);
   assert.equal(calls, 1);
