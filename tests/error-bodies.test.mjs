@@ -34,10 +34,38 @@ const HTML_500 = "<!DOCTYPE html><html><body><h1>500</h1>Internal Server Error</
 const events = [{ id: "ev-1", title: "Wedding", date: "2020-05-01", description: "Beach", imageUrl: "data:image/jpeg;base64,/9j/AAA" }];
 const story = { title: "T", subtitle: "S", pages: [{ eventId: "ev-1", title: "W", date: "2020-05-01", narrative: "n", imageUrl: "data:image/jpeg;base64,/9j/AAA", pageNumber: 1 }] };
 
+const REFRESH_COPY = "Refresh the page and try again. Your entries are still here.";
+
+for (const [name, body] of [
+  ["413 text page", VERCEL_413],
+  ["413 with JSON BAD_INPUT body", JSON.stringify({ error: { code: "BAD_INPUT", field: "events[0].title" } })],
+  ["413 with JSON SERVER body", JSON.stringify({ error: { code: "SERVER" } })],
+  ["413 HTML page", "<html><body>413 Payload Too Large</body></html>"],
+  ["413 empty body", ""],
+]) {
+  test(`${name}: generate and improve show the exact refresh copy, entries kept`, async () => {
+    const evBefore = JSON.stringify(events);
+    const stBefore = JSON.stringify(story);
+    const gen = await run(mockFetch(413, body), "/api/generate", { events: stripEventImages(events) }, GENERATE_ERROR_COPY);
+    const imp = await run(mockFetch(413, body), "/api/improve", { story: stripStoryImages(story), feedback: "x" }, IMPROVE_ERROR_COPY);
+    for (const r of [gen, imp]) {
+      assert.equal(r.story, undefined);
+      assert.equal(r.error.code, "TOO_LARGE");
+      assert.equal(r.message, REFRESH_COPY);
+      assert.equal(r.error.field, undefined);
+    }
+    assert.equal(JSON.stringify(events), evBefore, "entries untouched");
+    assert.equal(JSON.stringify(story), stBefore, "story untouched");
+  });
+}
+
+test("refresh copy is King's exact line, in both flows", () => {
+  assert.equal(GENERATE_ERROR_COPY.TOO_LARGE, REFRESH_COPY);
+  assert.equal(IMPROVE_ERROR_COPY.TOO_LARGE, REFRESH_COPY);
+  assert.deepEqual(parseErrorResponse(413, VERCEL_413, "30"), { code: "TOO_LARGE" });
+});
+
 for (const [name, status, body] of [
-  ["413 text page", 413, VERCEL_413],
-  ["413 with JSON BAD_INPUT body", 413, JSON.stringify({ error: { code: "BAD_INPUT", field: "events[0].title" } })],
-  ["413 empty body", 413, ""],
   ["500 HTML page", 500, HTML_500],
   ["400 non-JSON body", 400, "Bad Request"],
   ["502 empty body", 502, ""],

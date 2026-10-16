@@ -11,7 +11,7 @@
  * without adding a test framework dependency.
  */
 
-/** @typedef {"BUSY"|"TIMEOUT"|"BAD_INPUT"|"EMPTY"|"SERVER"|"OFFLINE"} ErrorCode */
+/** @typedef {"BUSY"|"TIMEOUT"|"BAD_INPUT"|"EMPTY"|"SERVER"|"OFFLINE"|"TOO_LARGE"} ErrorCode */
 /** @typedef {"title"|"date"} BadField */
 /** @typedef {{ code: ErrorCode, field?: BadField, eventId?: string, retryAfterSec?: number }} ClientError */
 /** @typedef {{ error: { code: ErrorCode, message: string, field?: string, eventId?: string } }} ApiErrorBody */
@@ -37,6 +37,7 @@ export const GENERATE_ERROR_COPY = {
   EMPTY: "We couldn't write your story this time. Try again, or add a little more detail to an entry.",
   SERVER: "Something went wrong on our side, not yours. Your entries are still here.",
   OFFLINE: "You seem to be offline. Your entries are still here — try again when you're connected.",
+  TOO_LARGE: "Refresh the page and try again. Your entries are still here.",
 };
 
 /** @type {Record<ErrorCode, string>} */
@@ -63,6 +64,7 @@ const SERVER_MESSAGES = {
   EMPTY: "The story service returned no usable story.",
   SERVER: "Story generation failed.",
   OFFLINE: "Network unavailable.",
+  TOO_LARGE: "Request body too large.",
 };
 
 /** @type {Record<Exclude<ErrorCode, "OFFLINE">, number>} */
@@ -72,6 +74,7 @@ export const STATUS_FOR_CODE = {
   BAD_INPUT: 400,
   EMPTY: 502,
   SERVER: 500,
+  TOO_LARGE: 413,
 };
 
 // ---------------------------------------------------------------------------
@@ -379,7 +382,7 @@ export async function mockResponse(mock, opts = {}) {
 // ---------------------------------------------------------------------------
 
 /** @type {ErrorCode[]} */
-const CODES = ["BUSY", "TIMEOUT", "BAD_INPUT", "EMPTY", "SERVER", "OFFLINE"];
+const CODES = ["BUSY", "TIMEOUT", "BAD_INPUT", "EMPTY", "SERVER", "OFFLINE", "TOO_LARGE"];
 
 /** @param {number} status @returns {ErrorCode} */
 function codeFromStatus(status) {
@@ -408,9 +411,10 @@ export function parseErrorResponse(status, bodyText, retryAfterHeader) {
   const out = { code: codeFromStatus(status) };
   const retryAfterSec = parseRetryAfter(retryAfterHeader);
   if (retryAfterSec) out.retryAfterSec = retryAfterSec;
-  // 413: the platform rejected the body size (Vercel's 4.5 MB cap). The
-  // entries are fine, so show the normal "try again" SERVER copy.
-  if (status === 413) return { code: "SERVER" };
+  // 413 (any body): the platform rejected the body size (Vercel's 4.5 MB
+  // cap), likely an old cached page still sending photos. A refresh loads the
+  // build that strips them; the entries are fine.
+  if (status === 413) return { code: "TOO_LARGE" };
   let parsedJson = false;
   try {
     const err = JSON.parse(bodyText)?.error;
