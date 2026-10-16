@@ -4,6 +4,9 @@ import {
   BUSY_WAIT_COPY,
   CLIENT_TIMEOUT_MS,
   SERVER_TIMEOUT_MS,
+  SLOW_HINT_MS,
+  STILL_WRITING_COPY,
+  afterSlowHintSettle,
   EmptyResultError,
   GENERATE_ERROR_COPY,
   IMPROVE_ERROR_COPY,
@@ -27,6 +30,32 @@ test("timeouts: server cutoff fires before the page cutoff", () => {
   assert.equal(SERVER_TIMEOUT_MS, 14_500);
   assert.equal(CLIENT_TIMEOUT_MS, 30_000);
   assert.ok(SERVER_TIMEOUT_MS < CLIENT_TIMEOUT_MS);
+});
+
+test("SLOW_HINT_MS is ~6s and STILL_WRITING_COPY is stable", () => {
+  assert.equal(SLOW_HINT_MS, 6_000);
+  assert.equal(STILL_WRITING_COPY, "Still writing your story…");
+  assert.ok(SLOW_HINT_MS < CLIENT_TIMEOUT_MS);
+});
+
+test("afterSlowHintSettle clears still-writing status and always hides the hint", () => {
+  assert.deepEqual(afterSlowHintSettle(STILL_WRITING_COPY), {
+    showSlowHint: false,
+    statusMessage: "",
+  });
+  assert.deepEqual(afterSlowHintSettle("Your storybook is ready."), {
+    showSlowHint: false,
+    statusMessage: "Your storybook is ready.",
+  });
+  assert.deepEqual(afterSlowHintSettle(""), {
+    showSlowHint: false,
+    statusMessage: "",
+  });
+  // A second settle is a no-op on an already-cleared status.
+  assert.deepEqual(afterSlowHintSettle(afterSlowHintSettle(STILL_WRITING_COPY).statusMessage), {
+    showSlowHint: false,
+    statusMessage: "",
+  });
 });
 
 test("BUSY: Gemini quota / 429 / 503 map to BUSY with Retry-After", async () => {

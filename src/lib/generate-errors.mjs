@@ -24,8 +24,26 @@ export const PRIMARY_TIMEOUT_MS = 10_000;
 export const FALLBACK_TIMEOUT_MS = 4_000;
 /** Page gives up after this long (covers platform errors that never return). */
 export const CLIENT_TIMEOUT_MS = 30_000;
-/** Show "Still writing your story…" after this long. */
-export const SLOW_HINT_MS = 10_000;
+/** Show after this long while Generate is still in flight (~6s). */
+export const SLOW_HINT_MS = 6_000;
+/** Visible + polite live-region copy once the slow hint fires. */
+export const STILL_WRITING_COPY = "Still writing your story…";
+
+/**
+ * Settle the Generate slow-hint UI: hide the hint and drop a still-writing
+ * status line so it cannot linger after success/error/cancel. Other status
+ * messages (ready, empty from an error handler) are left alone.
+ * @param {string} statusMessage
+ * @param {string} [stillWriting]
+ * @returns {{ showSlowHint: false, statusMessage: string }}
+ */
+export function afterSlowHintSettle(statusMessage, stillWriting = STILL_WRITING_COPY) {
+  return {
+    showSlowHint: false,
+    statusMessage: statusMessage === stillWriting ? "" : statusMessage,
+  };
+}
+
 /** Countdown used for a repeated BUSY when the server gave no Retry-After. */
 export const DEFAULT_BUSY_WAIT_SEC = 30;
 
@@ -440,5 +458,3 @@ export function isUsableStory(data) {
   const d = /** @type {{ pages?: unknown } | null} */ (data);
   return !!d && Array.isArray(d.pages) && d.pages.length > 0;
 }
-
-
