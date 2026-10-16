@@ -8,6 +8,7 @@ import StoryPreview from "@/components/StoryPreview";
 import { LifeEvent, GeneratedStory } from "@/types";
 import { getRandomQuote } from "@/lib/quotes";
 import { createSampleEvents } from "@/lib/sample-events";
+import { reattachStoryImages, stripEventImages, stripStoryImages } from "@/lib/strip-images.mjs";
 import {
   BUSY_WAIT_COPY,
   CLIENT_TIMEOUT_MS,
@@ -284,8 +285,9 @@ export default function Home() {
     setIsGenerating(true);
     setStatusMessage("Creating your personalized storybook…");
     await runRequest("generate", async () => {
-      const data = await postForStory("/api/generate", { events });
-      setStory(data);
+      // Photos stay in the browser: send text only, then put photos back by event id.
+      const data = await postForStory("/api/generate", { events: stripEventImages(events) });
+      setStory(reattachStoryImages(data, events) as GeneratedStory);
       setView("preview");
       setStatusMessage("Your storybook is ready.");
     });
@@ -299,8 +301,9 @@ export default function Home() {
     setStatusMessage("Updating your story with your feedback…");
     const ok = await runRequest("improve", async () => {
       // On any failure `story` is left as-is, so the original is unchanged.
-      const data = await postForStory("/api/improve", { story, feedback });
-      setStory(data);
+      // Send the story without photos; re-attach them by page id (index fallback).
+      const data = await postForStory("/api/improve", { story: stripStoryImages(story), feedback });
+      setStory(reattachStoryImages(data, story.pages) as GeneratedStory);
       setStatusMessage("Story updated.");
     });
     setIsImproving(false);
