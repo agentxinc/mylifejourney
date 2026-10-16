@@ -17,6 +17,7 @@ import {
   IMPROVE_ERROR_COPY,
   SLOW_HINT_MS,
   STILL_WRITING_COPY,
+  afterSlowHintSettle,
   classifyFetchFailure,
   isUsableStory,
   parseErrorResponse,
@@ -215,6 +216,21 @@ export default function Home() {
     }
   }, [busyWait]);
 
+  /**
+   * One place to drop the ~6s Still-writing timer/hint (and wipe a lingering
+   * still-writing status). Used on settle, error, retry arming, and unmount.
+   */
+  function endSlowHint(clearStillWritingStatus = false) {
+    if (slowTimerRef.current !== null) {
+      clearTimeout(slowTimerRef.current);
+      slowTimerRef.current = null;
+    }
+    setShowSlowHint(false);
+    if (clearStillWritingStatus) {
+      setStatusMessage((m) => afterSlowHintSettle(m).statusMessage);
+    }
+  }
+
   // Drop the Generate slow-hint timer on unmount so it cannot fire after leave.
   useEffect(() => {
     return () => {
@@ -254,6 +270,7 @@ export default function Home() {
     // The alert announces the start of the wait once; ticks are visual only.
     setError({ ...e, flow, id: errorSeq.current, waitSec, eventTitle: target?.title, opened: !!target });
     if (waitSec) setBusyWait(waitSec);
+    endSlowHint(true);
     setStatusMessage("");
     if (flow === "generate" && e.code === "BAD_INPUT" && e.field) {
       if (target) setEditingEvent(target);
@@ -274,8 +291,8 @@ export default function Home() {
     inFlight.current = true;
     pendingFocus.current = false;
     setError(null);
-    setShowSlowHint(false);
-    if (slowTimerRef.current !== null) clearTimeout(slowTimerRef.current);
+    // Retry / new Generate: drop any prior Still-writing timer, hint, and status.
+    endSlowHint(true);
     // One polite announcement via the existing role=status region; no second live region.
     slowTimerRef.current = setTimeout(() => {
       slowTimerRef.current = null;
@@ -290,11 +307,8 @@ export default function Home() {
       showError(err, flow);
       return false;
     } finally {
-      if (slowTimerRef.current !== null) {
-        clearTimeout(slowTimerRef.current);
-        slowTimerRef.current = null;
-      }
-      setShowSlowHint(false);
+      // Success leaves a "ready" status; still-writing is cleared. Hint always off.
+      endSlowHint(true);
       inFlight.current = false;
     }
   }
@@ -462,9 +476,7 @@ export default function Home() {
                 aria-busy={isGenerating}
               >
                 {isGenerating
-                  ? showSlowHint
-                    ? STILL_WRITING_COPY
-                    : "Creating Your Storybook..."
+                  ? "Creating Your Storybook..."
                   : busyWait > 0
                     ? `Try again in ${busyWait}s`
                     : error && error.flow === "generate"
@@ -504,5 +516,3 @@ export default function Home() {
     </main>
   );
 }
-
-

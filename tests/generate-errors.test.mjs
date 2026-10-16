@@ -6,6 +6,7 @@ import {
   SERVER_TIMEOUT_MS,
   SLOW_HINT_MS,
   STILL_WRITING_COPY,
+  afterSlowHintSettle,
   EmptyResultError,
   GENERATE_ERROR_COPY,
   IMPROVE_ERROR_COPY,
@@ -35,6 +36,26 @@ test("SLOW_HINT_MS is ~6s and STILL_WRITING_COPY is stable", () => {
   assert.equal(SLOW_HINT_MS, 6_000);
   assert.equal(STILL_WRITING_COPY, "Still writing your story…");
   assert.ok(SLOW_HINT_MS < CLIENT_TIMEOUT_MS);
+});
+
+test("afterSlowHintSettle clears still-writing status and always hides the hint", () => {
+  assert.deepEqual(afterSlowHintSettle(STILL_WRITING_COPY), {
+    showSlowHint: false,
+    statusMessage: "",
+  });
+  assert.deepEqual(afterSlowHintSettle("Your storybook is ready."), {
+    showSlowHint: false,
+    statusMessage: "Your storybook is ready.",
+  });
+  assert.deepEqual(afterSlowHintSettle(""), {
+    showSlowHint: false,
+    statusMessage: "",
+  });
+  // A second settle is a no-op on an already-cleared status.
+  assert.deepEqual(afterSlowHintSettle(afterSlowHintSettle(STILL_WRITING_COPY).statusMessage), {
+    showSlowHint: false,
+    statusMessage: "",
+  });
 });
 
 test("BUSY: Gemini quota / 429 / 503 map to BUSY with Retry-After", async () => {
@@ -244,5 +265,3 @@ test("gemini primary default is 3.5-flash, fallback 3.5-flash-lite", () => {
   assert.match(src, /const DEFAULT_MODEL = "gemini-3\.5-flash";/);
   assert.match(src, /const DEFAULT_FALLBACK_MODEL = "gemini-3\.5-flash-lite";/);
 });
-
-
