@@ -408,8 +408,13 @@ export function parseErrorResponse(status, bodyText, retryAfterHeader) {
   const out = { code: codeFromStatus(status) };
   const retryAfterSec = parseRetryAfter(retryAfterHeader);
   if (retryAfterSec) out.retryAfterSec = retryAfterSec;
+  // 413: the platform rejected the body size (Vercel's 4.5 MB cap). The
+  // entries are fine, so show the normal "try again" SERVER copy.
+  if (status === 413) return { code: "SERVER" };
+  let parsedJson = false;
   try {
     const err = JSON.parse(bodyText)?.error;
+    parsedJson = true;
     if (err && typeof err === "object" && CODES.includes(err.code)) {
       out.code = err.code;
       const m = typeof err.field === "string" ? err.field.match(/\.(title|date)$/) : null;
@@ -419,7 +424,26 @@ export function parseErrorResponse(status, bodyText, retryAfterHeader) {
   } catch {
     // Non-JSON body (platform error page): keep the status mapping.
   }
+  // A non-JSON 400/422 names no field to fix, so don't send people hunting.
+  if (!parsedJson && out.code === "BAD_INPUT") out.code = "SERVER";
   return out;
+}
+
+/**
+ * Turn a finished /api/generate or /api/improve response into a story, or
+ * throw a ClientError (never raw text). Used by page.tsx postForStory.
+ * @param {{ ok: boolean, status: number, text: string, retryAfter: string | null }} r
+ */
+export function storyFromResponse(r) {
+  if (!r.ok) throw parseErrorResponse(r.status, r.text, r.retryAfter);
+  let data;
+  try {
+    data = JSON.parse(r.text);
+  } catch {
+    throw /** @type {ClientError} */ ({ code: "EMPTY" });
+  }
+  if (!isUsableStory(data)) throw /** @type {ClientError} */ ({ code: "EMPTY" });
+  return data;
 }
 
 /**

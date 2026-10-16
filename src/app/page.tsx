@@ -18,7 +18,7 @@ import {
   IMPROVE_ERROR_COPY,
   SLOW_HINT_MS,
   classifyFetchFailure,
-  isUsableStory,
+  storyFromResponse,
   parseErrorResponse,
 } from "@/lib/generate-errors.mjs";
 
@@ -91,15 +91,13 @@ async function postForStory(path: string, payload: unknown): Promise<GeneratedSt
     } catch (err) {
       throw classifyFetchFailure(err, timedOut, navigator.onLine);
     }
-    if (!res.ok) throw parseErrorResponse(res.status, text, res.headers.get("Retry-After"));
-    let data: unknown;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      throw { code: "EMPTY" } as ClientError;
-    }
-    if (!isUsableStory(data)) throw { code: "EMPTY" } as ClientError;
-    return data as GeneratedStory;
+    // 413 / non-JSON error bodies map to the normal "try again" copy.
+    return storyFromResponse({
+      ok: res.ok,
+      status: res.status,
+      text,
+      retryAfter: res.headers.get("Retry-After"),
+    }) as GeneratedStory;
   } finally {
     clearTimeout(timer);
   }
