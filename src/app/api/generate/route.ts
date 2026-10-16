@@ -12,12 +12,31 @@ import {
   withTimeout,
   withModelFallback,
   retryLog,
+  chainConfigFromEnv,
 } from "@/lib/generate-errors.mjs";
+import { groqModel } from "@/lib/groq.mjs";
 import { LifeEvent } from "@/types";
 
 // Keep above SERVER_TIMEOUT_MS (14.5s) so our JSON TIMEOUT always wins over a
 // platform 504 page.
 export const maxDuration = 60;
+
+/** Env-driven provider order + clamped step timeouts; default = Gemini primary -> lite only. */
+function chainOpts() {
+  const cfg = chainConfigFromEnv(process.env);
+  return {
+    // Default env: no order passed, so behavior and log line are exactly as before.
+    ...(cfg.groqEnabled || process.env.MLJ_PROVIDER_ORDER?.trim() ? { order: cfg.order } : {}),
+    primaryMs: cfg.stepMs["gemini-primary"],
+    fallbackMs: cfg.stepMs["gemini-lite"],
+    groqMs: cfg.stepMs.groq,
+    models: {
+      "gemini-primary": process.env.GEMINI_MODEL?.trim() || "gemini-3.5-flash",
+      "gemini-lite": process.env.GEMINI_FALLBACK_MODEL?.trim() || "gemini-3.5-flash-lite",
+      groq: groqModel(process.env),
+    },
+  };
+}
 
 function reply(p: ReturnType<typeof errorPayload>) {
   return NextResponse.json(p.body, { status: p.status, headers: p.headers });
@@ -48,7 +67,11 @@ export async function POST(request: NextRequest) {
 
   try {
     const story = await withTimeout(
-      (signal) => withModelFallback((which, sig) => generateStoryFromEvents(events, sig, which), signal, { onRetry: retryLog("generate") }),
+      (signal) => withModelFallback((which, sig) => generateStoryFromEvents(events, sig, which), signal, {
+        ...chainOpts(),
+        groq: (sig) => generateStoryFromEvents(events, sig, "groq"),
+        onRetry: retryLog("generate"),
+      }),
       SERVER_TIMEOUT_MS
     );
     return NextResponse.json({

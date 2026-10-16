@@ -143,7 +143,7 @@ export function providerInfo(err) {
   const e = /** @type {{ status?: unknown, code?: unknown, message?: unknown }} */ (err);
   const message = typeof e?.message === "string" ? e.message : "";
   const code =
-    message.match(/\b(RESOURCE_EXHAUSTED|UNAVAILABLE|DEADLINE_EXCEEDED|INVALID_ARGUMENT|PERMISSION_DENIED|NOT_FOUND|INTERNAL)\b/)?.[1] ??
+    message.match(/\b(GROQ_AUTH|RESOURCE_EXHAUSTED|UNAVAILABLE|DEADLINE_EXCEEDED|INVALID_ARGUMENT|PERMISSION_DENIED|NOT_FOUND|INTERNAL)\b/)?.[1] ??
     (err instanceof TimeoutError ? "TIMEOUT" : null);
   return { status: e?.status ?? e?.code ?? null, code };
 }
@@ -152,20 +152,22 @@ export function providerInfo(err) {
  * Log line for a 503 retry (no user data). Called once the fallback attempt
  * has settled; primary and fallback provider status/code are separate fields.
  * @param {string} route
- * @returns {(primaryErr: unknown, fallbackErr?: unknown) => void}
+ * @returns {(primaryErr: unknown, fallbackErr?: unknown, info?: { answeredBy: string | null, attempts: unknown[] }) => void}
  */
-export const retryLog = (route) => (primaryErr, fallbackErr) => {
+export const retryLog = (route) => (primaryErr, fallbackErr, info) => {
   const p = providerInfo(primaryErr);
   const f = providerInfo(fallbackErr);
   console.warn(
     JSON.stringify({
       route,
-      retry: "gemini-fallback",
+      retry: info ? "provider-chain" : "gemini-fallback",
       primaryProviderStatus: p.status,
       primaryProviderCode: p.code,
       fallbackOk: fallbackErr == null,
       fallbackProviderStatus: f.status,
       fallbackProviderCode: f.code,
+      // Custom order / Groq only: who answered (provider + model, never user text or keys).
+      ...(info ? { answeredBy: info.answeredBy, attempts: info.attempts } : {}),
     })
   );
 };
@@ -196,37 +198,169 @@ function overloadedError() {
   return Object.assign(new Error("UNAVAILABLE: primary and fallback models overloaded"), { status: 503 });
 }
 
+/** Groq step cutoff (MLJ_GROQ_TIMEOUT_MS). */
+export const GROQ_TIMEOUT_MS = 4_000;
+/** Chain stops this far before SERVER_TIMEOUT_MS so our BUSY beats the route's TIMEOUT. */
+export const CHAIN_MARGIN_MS = 100;
+/** A step is skipped (not started) when less than this much budget is left. */
+export const MIN_STEP_MS = 1_000;
+
+/** @typedef {"gemini-primary"|"gemini-lite"|"groq"} ProviderId */
+export const PROVIDER_IDS = /** @type {const} */ (["gemini-primary", "gemini-lite", "groq"]);
+export const DEFAULT_PROVIDER_ORDER = "gemini-primary,gemini-lite";
+/** Order used when MLJ_FALLBACK_PROVIDER=groq and MLJ_PROVIDER_ORDER is unset. */
+export const GROQ_FALLBACK_ORDER = "gemini-primary,gemini-lite,groq";
+
+/** Config warnings already logged (once per process per kind). */
+const warned = new Set();
+/** @param {string} kind @param {Record<string, unknown>} line */
+function warnOnce(kind, line) {
+  if (warned.has(kind)) return;
+  warned.add(kind);
+  console.warn(JSON.stringify(line));
+}
+/** Test hook: forget which config warnings were logged. */
+export function resetConfigWarnings() { warned.clear(); }
+
+/** @param {unknown} v @param {number} dflt */
+function envMs(v, dflt) {
+  const n = Number(typeof v === "string" ? v.trim() : v);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : dflt;
+}
+
 /**
- * Try the primary model with its own cutoff; on an overload (503) or a
- * primary timeout, try the fallback model once with a shorter cutoff. Never
- * retries a 429 or anything else. If the fallback is also overloaded or times
- * out, throws a 503-shaped error so the route answers BUSY quickly.
+ * Read the provider chain config from env. Groq is only ever in the chain when
+ * MLJ_FALLBACK_PROVIDER=groq AND GROQ_API_KEY is set; otherwise behavior is
+ * exactly the pre-Groq default. Every step timeout is clamped to the hard cap.
+ * Never returns or logs the key itself.
+ * @param {Record<string, string | undefined>} env
+ */
+export function chainConfigFromEnv(env) {
+  const groqEnabled = env.MLJ_FALLBACK_PROVIDER?.trim().toLowerCase() === "groq" && !!env.GROQ_API_KEY?.trim();
+  const raw = env.MLJ_PROVIDER_ORDER?.trim() || (groqEnabled ? GROQ_FALLBACK_ORDER : DEFAULT_PROVIDER_ORDER);
+  /** @type {ProviderId[]} */
+  const order = [];
+  if (raw.toLowerCase() === "groq") {
+    // Exactly "groq": Groq only (warned), or the default when Groq is disabled.
+    if (groqEnabled) {
+      order.push("groq");
+      warnOnce("groq-only", { warn: "provider-order", groqOnly: true });
+    } else {
+      order.push("gemini-primary", "gemini-lite");
+    }
+  } else {
+    /** @type {string[]} */
+    const unknown = [];
+    for (const id of raw.split(",").map((x) => x.trim().toLowerCase()).filter(Boolean)) {
+      if (!(/** @type {readonly string[]} */ (PROVIDER_IDS)).includes(id)) { unknown.push(id); continue; }
+      if (id === "groq" && !groqEnabled) continue;
+      if (!order.includes(/** @type {ProviderId} */ (id))) order.push(/** @type {ProviderId} */ (id));
+    }
+    // Env names only (sanitized), never user data or keys.
+    if (unknown.length) warnOnce("unknown", { warn: "provider-order", dropped: unknown.map((u) => u.replace(/[^a-z0-9-]/g, "").slice(0, 32)) });
+    if (!order.length) {
+      order.push("gemini-primary", "gemini-lite");
+    } else if (unknown.length || !order.includes("gemini-primary")) {
+      if (!order.includes("gemini-primary")) {
+        order.push("gemini-primary");
+        warnOnce("primary-added", { warn: "provider-order", added: "gemini-primary", order: [...order] });
+      }
+    }
+  }
+  return {
+    order,
+    groqEnabled,
+    stepMs: {
+      "gemini-primary": Math.min(envMs(env.MLJ_PRIMARY_TIMEOUT_MS, PRIMARY_TIMEOUT_MS), SERVER_TIMEOUT_MS),
+      "gemini-lite": Math.min(envMs(env.MLJ_FALLBACK_TIMEOUT_MS, FALLBACK_TIMEOUT_MS), SERVER_TIMEOUT_MS),
+      groq: Math.min(envMs(env.MLJ_GROQ_TIMEOUT_MS, GROQ_TIMEOUT_MS), SERVER_TIMEOUT_MS),
+    },
+  };
+}
+
+/** @param {unknown} err  Groq 429/5xx are capacity errors: no retry, move on / BUSY. */
+function isCapacity(err) {
+  const s = Number(/** @type {{ status?: unknown }} */ (err)?.status);
+  // 401/403 (GROQ_AUTH) and a malformed 200 body (502) also move on: Gemini can still answer.
+  return isOverloaded(err) || s === 429 || s === 401 || s === 403 || (s >= 500 && s <= 599);
+}
+
+/**
+ * Run providers in order, each once, each with its own cutoff clamped to the
+ * remaining hard-cap budget (total never exceeds min(capMs, SERVER_TIMEOUT_MS)
+ * - CHAIN_MARGIN_MS, whatever env says). Moves to the next provider only on an
+ * overload/timeout (Gemini 503, Groq 429/5xx); a Gemini 429 or any other error
+ * is thrown as-is. Nothing is ever retried on the same provider. If every
+ * provider that ran was overloaded/timed out, or the budget ran out, throws a
+ * 503-shaped error so the route answers BUSY.
+ *
+ * Default (no order/groq opts) is exactly the old behavior: primary 10s, pause
+ * 200-400ms, fallback 4s. In Gemini-first order Groq only realistically helps
+ * after a FAST 503: 10s + pause + 4s leaves ~0.3s, under MIN_STEP_MS, so Groq
+ * is skipped after a primary timeout.
  * @template T
- * @param {(which: "primary" | "fallback", signal: AbortSignal) => Promise<T>} task
+ * @param {(which: "primary" | "fallback", signal: AbortSignal) => Promise<T>} task  Gemini call
  * @param {AbortSignal} [signal]  outer hard-cap signal (from withTimeout)
- * @param {{ primaryMs?: number, fallbackMs?: number, baseMs?: number, random?: () => number, onRetry?: (primaryErr: unknown, fallbackErr?: unknown) => void }} [opts]
+ * @param {{ primaryMs?: number, fallbackMs?: number, groqMs?: number, capMs?: number, minStepMs?: number,
+ *   order?: ProviderId[], models?: Partial<Record<ProviderId, string>>, groq?: (signal: AbortSignal) => Promise<T>, now?: () => number,
+ *   baseMs?: number, random?: () => number,
+ *   onRetry?: (primaryErr: unknown, fallbackErr?: unknown, info?: { answeredBy: string | null, attempts: { provider: string, status: unknown, code: unknown }[] }) => void }} [opts]
  * @returns {Promise<T>}
  */
 export async function withModelFallback(task, signal, opts = {}) {
-  const primaryMs = opts.primaryMs ?? PRIMARY_TIMEOUT_MS;
-  const fallbackMs = opts.fallbackMs ?? FALLBACK_TIMEOUT_MS;
-  try {
-    return await withTimeout((s) => task("primary", linkSignals(signal, s)), primaryMs);
-  } catch (err) {
-    if (!(isOverloaded(err) || err instanceof TimeoutError) || signal?.aborted) throw err;
-    const wait = (opts.baseMs ?? RETRY_BASE_MS) + Math.floor((opts.random ?? Math.random)() * 200);
-    await abortableWait(wait, signal, err);
-    let result;
-    try {
-      result = await withTimeout((s) => task("fallback", linkSignals(signal, s)), fallbackMs);
-    } catch (err2) {
-      opts.onRetry?.(err, err2);
-      if (isOverloaded(err2) || err2 instanceof TimeoutError) throw overloadedError();
-      throw err2;
+  const now = opts.now ?? Date.now;
+  const deadline = now() + Math.min(opts.capMs ?? SERVER_TIMEOUT_MS, SERVER_TIMEOUT_MS) - CHAIN_MARGIN_MS;
+  const minStep = opts.minStepMs ?? MIN_STEP_MS;
+  const custom = !!opts.order;
+  /** @type {ProviderId[]} */
+  const order = (opts.order ?? ["gemini-primary", "gemini-lite"]).filter((id) => id !== "groq" || !!opts.groq);
+  /** @type {Record<ProviderId, number>} */
+  const stepMs = {
+    "gemini-primary": opts.primaryMs ?? PRIMARY_TIMEOUT_MS,
+    "gemini-lite": opts.fallbackMs ?? FALLBACK_TIMEOUT_MS,
+    groq: opts.groqMs ?? GROQ_TIMEOUT_MS,
+  };
+  /** @type {{ provider: string, err: unknown }[]} */
+  const tried = [];
+  const report = (/** @type {string | null} */ answeredBy) => {
+    if (!tried.length || (!answeredBy && tried.length < 2 && !custom)) return;
+    const first = tried[0].err;
+    const last = tried.length > 1 ? tried[tried.length - 1].err : undefined;
+    opts.onRetry?.(first, answeredBy ? undefined : last ?? first,
+      custom ? { answeredBy, attempts: tried.map((t) => ({ provider: t.provider, ...providerInfo(t.err) })) } : undefined);
+  };
+  for (let i = 0; i < order.length; i++) {
+    const id = order[i];
+    if (i > 0) {
+      const wait = (opts.baseMs ?? RETRY_BASE_MS) + Math.floor((opts.random ?? Math.random)() * 200);
+      await abortableWait(Math.max(0, Math.min(wait, deadline - now())), signal, tried[tried.length - 1].err);
     }
-    opts.onRetry?.(err, undefined);
-    return result;
+    const remaining = deadline - now();
+    if (remaining < Math.min(minStep, stepMs[id])) break; // budget exhausted: skip the rest
+    const ms = Math.min(stepMs[id], remaining);
+    try {
+      const run = (/** @type {AbortSignal} */ s) => {
+        const sig = linkSignals(signal, s);
+        if (id === "groq") return /** @type {NonNullable<typeof opts.groq>} */ (opts.groq)(sig);
+        return task(id === "gemini-primary" ? "primary" : "fallback", sig);
+      };
+      const result = await withTimeout(run, ms);
+      if (tried.length) report(opts.models?.[id] ? `${id}:${opts.models[id]}` : id);
+      return result;
+    } catch (err) {
+      tried.push({ provider: id, err });
+      const movable = id === "groq" ? isCapacity(err) || err instanceof TimeoutError : isOverloaded(err) || err instanceof TimeoutError;
+      if (!movable || signal?.aborted) {
+        if (tried.length > 1) report(null);
+        throw err;
+      }
+    }
   }
+  report(null);
+  // Classic single-provider order keeps its old contract: a lone failure is rethrown.
+  // Groq failures always end as BUSY.
+  if (tried.length === 1 && order.length === 1 && tried[0].provider !== "groq") throw tried[0].err;
+  throw overloadedError();
 }
 
 /**
@@ -263,7 +397,7 @@ export function logSafe(route, code, err, opts = {}) {
   const e = /** @type {{ status?: unknown, code?: unknown, name?: unknown, message?: unknown } | null} */ (err);
   const message = typeof e?.message === "string" ? e.message : "";
   const providerCode =
-    message.match(/\b(RESOURCE_EXHAUSTED|UNAVAILABLE|DEADLINE_EXCEEDED|INVALID_ARGUMENT|PERMISSION_DENIED|NOT_FOUND|INTERNAL)\b/)?.[1] ?? null;
+    message.match(/\b(GROQ_AUTH|RESOURCE_EXHAUSTED|UNAVAILABLE|DEADLINE_EXCEEDED|INVALID_ARGUMENT|PERMISSION_DENIED|NOT_FOUND|INTERNAL)\b/)?.[1] ?? null;
   const status = Number(e?.status ?? e?.code);
   const capacity =
     providerCode !== "INVALID_ARGUMENT" &&

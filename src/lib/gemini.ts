@@ -1,6 +1,7 @@
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { LifeEvent, StoryPage } from "@/types";
 import { BadReplyError, describeResponse, parseStoryText } from "@/lib/parse-story.mjs";
+import { groqGenerate } from "@/lib/groq.mjs";
 
 /**
  * Story replies are long JSON. Leave plenty of output room and keep thinking
@@ -55,13 +56,31 @@ const DEFAULT_MODEL = "gemini-3.5-flash";
 /** Used once when the primary is overloaded (503) or slow. */
 const DEFAULT_FALLBACK_MODEL = "gemini-3.5-flash-lite";
 
-export type ModelChoice = "primary" | "fallback";
+/** "groq" is the optional env-gated fallback (see generate-errors chainConfigFromEnv). */
+export type ModelChoice = "primary" | "fallback" | "groq";
 
-function getModel(which: ModelChoice = "primary"): string {
+function getModel(which: Exclude<ModelChoice, "groq"> = "primary"): string {
   if (which === "fallback") {
     return process.env.GEMINI_FALLBACK_MODEL?.trim() || DEFAULT_FALLBACK_MODEL;
   }
   return process.env.GEMINI_MODEL?.trim() || DEFAULT_MODEL;
+}
+
+/** One call to the chosen provider; same parser and guards for both. */
+async function callModel(which: ModelChoice, prompt: string, abortSignal?: AbortSignal): Promise<GeminiReply> {
+  if (which === "groq") {
+    return groqGenerate(prompt, abortSignal ?? new AbortController().signal);
+  }
+  return getClient().models.generateContent({
+    model: getModel(which),
+    contents: prompt,
+    config: {
+      ...STORY_CONFIG,
+      // Cancels the HTTP call at our cutoff. Per the SDK, the provider may
+      // still bill work already started; this stops us waiting on it.
+      abortSignal,
+    },
+  });
 }
 
 function getClient() {
@@ -77,8 +96,6 @@ export async function generateStoryFromEvents(
   abortSignal?: AbortSignal,
   which: ModelChoice = "primary"
 ): Promise<{ title: string; subtitle: string; pages: StoryPage[] }> {
-  const ai = getClient();
-
   const eventDescriptions = events
     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
     .map(
@@ -110,16 +127,7 @@ Respond in JSON format with this exact structure:
 
 Make the narratives personal, warm, and vivid. Each narrative should be 2-3 paragraphs that paint a picture of the moment. Use sensory details and emotions.`;
 
-  const response = await ai.models.generateContent({
-    model: getModel(which),
-    contents: prompt,
-    config: {
-      ...STORY_CONFIG,
-      // Cancels the HTTP call at our cutoff. Per the SDK, the provider may
-      // still bill work already started; this stops us waiting on it.
-      abortSignal,
-    },
-  });
+  const response = await callModel(which, prompt, abortSignal);
 
   const parsed = parseStoryJson("generate", response);
 
@@ -145,8 +153,6 @@ export async function improveStory(
   abortSignal?: AbortSignal,
   which: ModelChoice = "primary"
 ): Promise<{ title: string; subtitle: string; pages: StoryPage[] }> {
-  const ai = getClient();
-
   const prompt = `You are a creative storyteller improving a personalized life journey slambook.
 
 Here is the current storybook:
@@ -173,16 +179,7 @@ Respond in JSON format with this exact structure:
   ]
 }`;
 
-  const response = await ai.models.generateContent({
-    model: getModel(which),
-    contents: prompt,
-    config: {
-      ...STORY_CONFIG,
-      // Cancels the HTTP call at our cutoff. Per the SDK, the provider may
-      // still bill work already started; this stops us waiting on it.
-      abortSignal,
-    },
-  });
+  const response = await callModel(which, prompt, abortSignal);
 
   const parsed = parseStoryJson("improve", response);
 
