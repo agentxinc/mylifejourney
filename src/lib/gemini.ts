@@ -1,6 +1,7 @@
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { LifeEvent, StoryPage } from "@/types";
 import { BadReplyError, describeResponse, parseStoryText } from "@/lib/parse-story.mjs";
+import { buildGeneratePrompt, buildImprovePrompt, reattachImages } from "@/lib/strip-images.mjs";
 
 /**
  * Story replies are long JSON. Leave plenty of output room and keep thinking
@@ -79,36 +80,9 @@ export async function generateStoryFromEvents(
 ): Promise<{ title: string; subtitle: string; pages: StoryPage[] }> {
   const ai = getClient();
 
-  const eventDescriptions = events
-    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-    .map(
-      (e, i) =>
-        `Event ${i + 1}: "${e.title}" on ${e.date}. Description: ${e.description}`
-    )
-    .join("\n");
-
-  const prompt = `You are a creative storyteller creating a personalized life journey slambook.
-Given these life events, create a beautiful narrative for each event that reads like a storybook.
-
-Life Events:
-${eventDescriptions}
-
-Respond in JSON format with this exact structure:
-{
-  "title": "A creative title for this life journey",
-  "subtitle": "A touching subtitle",
-  "pages": [
-    {
-      "eventId": "the event id",
-      "title": "Chapter title for this event",
-      "date": "the date",
-      "narrative": "A 2-3 paragraph beautiful narrative about this life event, written in a warm, personal storytelling style. Make it emotional and vivid.",
-      "pageNumber": 1
-    }
-  ]
-}
-
-Make the narratives personal, warm, and vivid. Each narrative should be 2-3 paragraphs that paint a picture of the moment. Use sensory details and emotions.`;
+  // Sorted copy; photos are never part of the prompt (see strip-images.mjs).
+  const sorted = [...events].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  const prompt = buildGeneratePrompt(sorted);
 
   const response = await ai.models.generateContent({
     model: getModel(which),
@@ -123,12 +97,13 @@ Make the narratives personal, warm, and vivid. Each narrative should be 2-3 para
 
   const parsed = parseStoryJson("generate", response);
 
-  // Map back the image URLs from original events
+  // Keep ids aligned to events; the server never holds photos, so imageUrl
+  // stays null here and the client re-attaches its own photos by id.
   const pages: StoryPage[] = parsed.pages.map(
     (page: StoryPage, index: number) => ({
       ...page,
-      eventId: events[index]?.id ?? page.eventId,
-      imageUrl: events[index]?.imageUrl ?? null,
+      eventId: sorted[index]?.id ?? page.eventId,
+      imageUrl: null,
     })
   );
 
@@ -147,31 +122,7 @@ export async function improveStory(
 ): Promise<{ title: string; subtitle: string; pages: StoryPage[] }> {
   const ai = getClient();
 
-  const prompt = `You are a creative storyteller improving a personalized life journey slambook.
-
-Here is the current storybook:
-${JSON.stringify(currentStory, null, 2)}
-
-The user wants these improvements:
-"${feedback}"
-
-Please regenerate the storybook with the requested improvements. Keep the same structure but apply the changes.
-
-Respond in JSON format with this exact structure:
-{
-  "title": "Updated title if needed",
-  "subtitle": "Updated subtitle if needed",
-  "pages": [
-    {
-      "eventId": "the event id",
-      "title": "Chapter title",
-      "date": "the date",
-      "narrative": "Updated narrative",
-      "imageUrl": null,
-      "pageNumber": 1
-    }
-  ]
-}`;
+  const prompt = buildImprovePrompt(currentStory, feedback);
 
   const response = await ai.models.generateContent({
     model: getModel(which),
@@ -186,13 +137,9 @@ Respond in JSON format with this exact structure:
 
   const parsed = parseStoryJson("improve", response);
 
-  // Preserve image URLs from current story
-  const pages: StoryPage[] = parsed.pages.map(
-    (page: StoryPage, index: number) => ({
-      ...page,
-      imageUrl: currentStory.pages[index]?.imageUrl ?? null,
-    })
-  );
+  // Re-attach by eventId (index fallback); a no-op when the route already
+  // stripped photos, since then currentStory carries none.
+  const pages: StoryPage[] = reattachImages(parsed.pages, currentStory.pages) as StoryPage[];
 
   return {
     title: parsed.title ?? currentStory.title,

@@ -12,6 +12,7 @@ import {
   withModelFallback,
   retryLog,
 } from "@/lib/generate-errors.mjs";
+import { stripStoryImages } from "@/lib/strip-images.mjs";
 import { StoryPage } from "@/types";
 
 // Keep above SERVER_TIMEOUT_MS (14.5s); see /api/generate.
@@ -38,6 +39,8 @@ export async function POST(request: NextRequest) {
   let feedback: string;
   try {
     ({ story, feedback } = await request.json());
+    // Old cached clients may still send photos: drop them, don't 400.
+    story = stripStoryImages(story) as typeof story;
   } catch {
     return reply(errorPayload("BAD_INPUT"));
   }
